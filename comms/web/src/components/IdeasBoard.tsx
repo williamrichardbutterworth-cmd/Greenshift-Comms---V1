@@ -89,7 +89,7 @@ export function IdeasBoard() {
 
         <div>
           <label className="label block mb-1">Your name</label>
-          <input className="input" placeholder="e.g. Joran" value={author} onChange={(e) => setAuthor(e.target.value)} />
+          <input className="input" placeholder="Your name" value={author} onChange={(e) => setAuthor(e.target.value)} />
         </div>
         <div>
           <label className="label block mb-1">Idea *</label>
