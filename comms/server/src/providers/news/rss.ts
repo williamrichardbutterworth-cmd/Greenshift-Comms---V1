@@ -1,5 +1,6 @@
 import Parser from 'rss-parser';
-import { RSS_FEEDS } from './feeds';
+import { activeFeeds } from '../../services/newsStore';
+import { classifyTopic } from './classify';
 import type { NewsProvider, NewsItem } from './types';
 
 const parser = new Parser({ timeout: 10000 });
@@ -14,17 +15,23 @@ export class RssNewsProvider implements NewsProvider {
   readonly name = 'rss';
 
   async getItems(limit: number): Promise<NewsItem[]> {
+    const feeds = await activeFeeds();
     const results = await Promise.allSettled(
-      RSS_FEEDS.map(async (feed) => {
+      feeds.map(async (feed) => {
         const parsed = await parser.parseURL(feed.url);
-        return (parsed.items ?? []).map<NewsItem>((it) => ({
-          id: hash((it.link ?? '') + (it.title ?? '')),
-          title: (it.title ?? '').trim(),
-          source: feed.name,
-          url: it.link ?? '',
-          publishedAt: it.isoDate ?? it.pubDate ?? new Date().toISOString(),
-          summary: (it.contentSnippet ?? it.content ?? '').slice(0, 280).trim() || undefined,
-        }));
+        return (parsed.items ?? []).map<NewsItem>((it) => {
+          const title = (it.title ?? '').trim();
+          const summary = (it.contentSnippet ?? it.content ?? '').slice(0, 280).trim() || undefined;
+          return {
+            id: hash((it.link ?? '') + (it.title ?? '')),
+            title,
+            source: feed.name,
+            url: it.link ?? '',
+            publishedAt: it.isoDate ?? it.pubDate ?? new Date().toISOString(),
+            summary,
+            topic: classifyTopic(title, summary ?? ''),
+          };
+        });
       }),
     );
 

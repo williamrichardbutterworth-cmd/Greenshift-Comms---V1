@@ -26,7 +26,23 @@ export interface NewsItem {
   url: string;
   publishedAt: string;
   summary?: string;
+  topic?: string;
   angle?: string;
+}
+
+// ── News curation (§8A): feeds, saved-article library, headlines ──
+export interface NewsFeedSource { id: string; name: string; url: string; enabled: boolean; createdAt: string; }
+export interface SavedArticle {
+  id: string; title: string; source: string; url: string; summary: string;
+  topic: string; note: string; publishedAt: string | null; createdAt: string;
+}
+export interface Headline {
+  id: string; title: string; source: string; url: string; summary: string;
+  topic: string; priority: number; publishedAt: string | null; createdAt: string;
+}
+export interface ArticleInput {
+  title: string; source?: string; url?: string; summary?: string;
+  topic?: string; note?: string; publishedAt?: string | null;
 }
 export interface TalkingPoint { type: 'fact' | 'statement' | 'question' | string; text: string; }
 export interface GeoHook { headline: string; angle: string; }
@@ -204,6 +220,24 @@ export const api = {
   dailyReview: () => j<DailyReview>('/api/daily-review'),
   refreshReview: () => j<DailyReview>('/api/daily-review/refresh', { method: 'POST' }),
   news: (limit = 12) => j<NewsItem[]>(`/api/news?limit=${limit}`),
+  newsTopics: () => j<string[]>('/api/news/topics'),
+  newsFeeds: {
+    list: () => j<NewsFeedSource[]>('/api/news/feeds'),
+    add: (input: { name?: string; url: string }) => j<NewsFeedSource>('/api/news/feeds', postJson(input)),
+    setEnabled: (id: string, enabled: boolean) =>
+      j<NewsFeedSource>(`/api/news/feeds/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }),
+    remove: (id: string) => j<{ ok: boolean }>(`/api/news/feeds/${id}`, { method: 'DELETE' }),
+  },
+  savedArticles: {
+    list: () => j<SavedArticle[]>('/api/news/articles'),
+    save: (input: ArticleInput) => j<SavedArticle>('/api/news/articles', postJson(input)),
+    remove: (id: string) => j<{ ok: boolean }>(`/api/news/articles/${id}`, { method: 'DELETE' }),
+  },
+  headlines: {
+    list: () => j<Headline[]>('/api/news/headlines'),
+    add: (input: ArticleInput & { priority?: number }) => j<Headline>('/api/news/headlines', postJson(input)),
+    remove: (id: string) => j<{ ok: boolean }>(`/api/news/headlines/${id}`, { method: 'DELETE' }),
+  },
   draftReport: (inputs: ReportInputs, selectedNews: NewsItem[]) =>
     j<{ narrative: ReportNarrative; snapshot: MarketSnapshot; provider: string }>(
       '/api/report/draft',

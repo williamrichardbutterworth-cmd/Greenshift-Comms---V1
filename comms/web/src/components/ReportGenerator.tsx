@@ -7,7 +7,7 @@ import {
 import {
   api, EMPTY_DOC,
   type NewsItem, type ReportInputs, type MarketSnapshot, type ReportDoc,
-  type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile,
+  type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle,
 } from '../lib/api';
 import { CommsEditor } from '../editor/CommsEditor';
 import { ClientProfileForm } from './ClientProfileForm';
@@ -65,7 +65,24 @@ export function ReportGenerator() {
 
   useEffect(() => {
     refreshProjects();
-    api.news(10).then(setNews).catch(() => setNews([]));
+    // Evidence = the saved-article library (pinned for reference) + the live feed.
+    Promise.all([
+      api.news(10).catch(() => [] as NewsItem[]),
+      api.savedArticles.list().catch(() => [] as SavedArticle[]),
+    ]).then(([liveItems, saved]) => {
+      const fromLib: NewsItem[] = saved.map((a) => ({
+        id: `lib-${a.id}`, title: a.title, source: a.source || 'Saved', url: a.url,
+        publishedAt: a.publishedAt ?? '', summary: a.summary, topic: a.topic,
+      }));
+      const seen = new Set<string>();
+      const merged = [...fromLib, ...liveItems].filter((n) => {
+        const k = n.title.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      setNews(merged);
+    });
   }, []);
 
   // ── Debounced autosave of the live document + client profile ──

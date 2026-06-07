@@ -83,3 +83,46 @@ create table if not exists public.client_files (
 create index if not exists client_files_project_idx on public.client_files (project_id, created_at desc);
 
 alter table public.client_files enable row level security;
+
+
+-- ─────────────────────────── News system (§8A) ───────────────────────────────
+-- User-curatable feed sources (seeded from the built-in list on first load).
+create table if not exists public.news_feeds (
+  id          uuid        primary key default gen_random_uuid(),
+  name        text        not null,
+  url         text        not null,
+  enabled     boolean     not null default true,
+  created_at  timestamptz not null default now()
+);
+alter table public.news_feeds enable row level security;
+
+-- Saved-article library — articles pinned for reference in reports / on calls.
+create table if not exists public.saved_articles (
+  id            uuid        primary key default gen_random_uuid(),
+  title         text        not null,
+  source        text        not null default '',
+  url           text        not null default '',
+  summary       text        not null default '',
+  topic         text        not null default 'other',
+  note          text        not null default '',
+  published_at  timestamptz,
+  created_at    timestamptz not null default now()
+);
+create index if not exists saved_articles_created_idx on public.saved_articles (created_at desc);
+alter table public.saved_articles enable row level security;
+
+-- Persisted "Headlines" — the biggest stories, kept over time (manually pinned
+-- or auto-suggested), ranked by priority.
+create table if not exists public.headlines (
+  id            uuid        primary key default gen_random_uuid(),
+  title         text        not null,
+  source        text        not null default '',
+  url           text        not null default '',
+  summary       text        not null default '',
+  topic         text        not null default 'other',
+  priority      integer     not null default 0,
+  published_at  timestamptz,
+  created_at    timestamptz not null default now()
+);
+create index if not exists headlines_rank_idx on public.headlines (priority desc, created_at desc);
+alter table public.headlines enable row level security;

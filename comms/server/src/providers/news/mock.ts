@@ -1,11 +1,12 @@
 import type { NewsItem } from './types';
+import { classifyTopic } from './classify';
 
 // Sample stories (incl. a geopolitical example) so the feed shows something
 // before live feeds are wired / when offline.
 export function mockNews(): NewsItem[] {
   const now = Date.now();
   const ago = (h: number) => new Date(now - h * 3600_000).toISOString();
-  return [
+  const items: NewsItem[] = [
     {
       id: 'mock-hormuz',
       title: 'Strait of Hormuz tensions lift European gas prices',
@@ -32,4 +33,5 @@ export function mockNews(): NewsItem[] {
       summary: 'Comfortable storage levels are tempering price spikes despite colder forecasts.',
     },
   ];
+  return items.map((i) => ({ ...i, topic: classifyTopic(i.title, i.summary ?? '') }));
 }
