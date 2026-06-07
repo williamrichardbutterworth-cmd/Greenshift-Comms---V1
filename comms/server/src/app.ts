@@ -5,6 +5,7 @@ import { marketRoutes } from './routes/market';
 import { reviewRoutes } from './routes/review';
 import { newsRoutes } from './routes/news';
 import { reportRoutes } from './routes/report';
+import { reportProjectRoutes } from './routes/reportProjects';
 import { ideasRoutes } from './routes/ideas';
 
 // Builds the Fastify app WITHOUT listening or starting the scheduler, so the
@@ -25,6 +26,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(reviewRoutes);
   await app.register(newsRoutes);
   await app.register(reportRoutes);
+  await app.register(reportProjectRoutes);
   await app.register(ideasRoutes);
 
   return app;

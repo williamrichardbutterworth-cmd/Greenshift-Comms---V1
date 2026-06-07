@@ -10,6 +10,9 @@ export interface ChartOptions {
   width?: number;
   height?: number;
   color?: string;
+  kind?: 'line' | 'bar';
+  // Treat the `t` values as plain category labels (e.g. "Q1") rather than dates.
+  categoryAxis?: boolean;
 }
 
 const GREEN = '#40A800';
@@ -41,16 +44,24 @@ export function renderLineChartSVG(opts: ChartOptions): string {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Arial, sans-serif"><rect width="${W}" height="${H}" fill="#fff"/><text x="16" y="26" font-size="15" font-weight="600" fill="${INK}">${titleLine}</text><text x="${W / 2}" y="${H / 2}" font-size="13" fill="${MUTED}" text-anchor="middle">Not enough data to chart.</text></svg>`;
   }
 
+  const isBar = opts.kind === 'bar';
+  const fmtX = opts.categoryAxis ? (t: string) => esc(t) : fmtDate;
+
   const L = 52, R = 18, T = 40, B = 34;
   const plotW = W - L - R;
   const plotH = H - T - B;
   const vals = pts.map((p) => p.v);
   let min = Math.min(...vals), max = Math.max(...vals);
+  if (isBar) { min = Math.min(0, min); max = Math.max(0, max); } // bars anchor at zero
   if (min === max) { min -= 1; max += 1; }
   const pad = (max - min) * 0.08;
-  min -= pad; max += pad;
+  if (!isBar || min < 0) min -= pad;
+  max += pad;
 
-  const x = (i: number) => L + (i / (pts.length - 1)) * plotW;
+  // Line charts space points across the full width; bars sit in evenly-sized slots.
+  const x = (i: number) => L + (i / Math.max(1, pts.length - 1)) * plotW;
+  const slot = plotW / pts.length;
+  const xc = (i: number) => L + (i + 0.5) * slot;
   const y = (v: number) => T + plotH - ((v - min) / (max - min)) * plotH;
 
   let grid = '';
@@ -62,25 +73,50 @@ export function renderLineChartSVG(opts: ChartOptions): string {
     grid += `<text x="${L - 8}" y="${(yy + 3.5).toFixed(1)}" font-size="10" fill="${MUTED}" text-anchor="end">${niceNum(v)}</text>`;
   }
 
-  const xIdx = [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
-  const xLabels = xIdx
-    .map((i, k) => {
-      const anchor = k === 0 ? 'start' : k === xIdx.length - 1 ? 'end' : 'middle';
-      return `<text x="${x(i).toFixed(1)}" y="${H - 12}" font-size="10" fill="${MUTED}" text-anchor="${anchor}">${fmtDate(pts[i].t)}</text>`;
-    })
-    .join('');
+  // Label every category when there are few; otherwise first / middle / last.
+  const labelEach = isBar || (opts.categoryAxis === true && pts.length <= 8);
+  let xLabels = '';
+  if (labelEach) {
+    xLabels = pts
+      .map((p, i) => `<text x="${(isBar ? xc(i) : x(i)).toFixed(1)}" y="${H - 12}" font-size="9.5" fill="${MUTED}" text-anchor="middle">${fmtX(p.t)}</text>`)
+      .join('');
+  } else {
+    const xIdx = [0, Math.floor((pts.length - 1) / 2), pts.length - 1];
+    xLabels = xIdx
+      .map((i, k) => {
+        const anchor = k === 0 ? 'start' : k === xIdx.length - 1 ? 'end' : 'middle';
+        return `<text x="${x(i).toFixed(1)}" y="${H - 12}" font-size="10" fill="${MUTED}" text-anchor="${anchor}">${fmtX(pts[i].t)}</text>`;
+      })
+      .join('');
+  }
 
-  const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
-  const areaPath = `${linePath} L${x(pts.length - 1).toFixed(1)},${(T + plotH).toFixed(1)} L${x(0).toFixed(1)},${(T + plotH).toFixed(1)} Z`;
-  const last = pts[pts.length - 1];
+  let series: string;
+  if (isBar) {
+    const barW = Math.max(2, slot * 0.62);
+    const baseY = y(0);
+    series = pts
+      .map((p, i) => {
+        const vy = y(p.v);
+        const top = Math.min(vy, baseY);
+        const h = Math.max(1, Math.abs(vy - baseY));
+        return `<rect x="${(xc(i) - barW / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${color}"/>`;
+      })
+      .join('');
+  } else {
+    const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+    const areaPath = `${linePath} L${x(pts.length - 1).toFixed(1)},${(T + plotH).toFixed(1)} L${x(0).toFixed(1)},${(T + plotH).toFixed(1)} Z`;
+    const last = pts[pts.length - 1];
+    series =
+      `<path d="${areaPath}" fill="${color}" fill-opacity="0.10"/>` +
+      `<path d="${linePath}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` +
+      `<circle cx="${x(pts.length - 1).toFixed(1)}" cy="${y(last.v).toFixed(1)}" r="3.5" fill="${color}"/>`;
+  }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Arial, sans-serif">
   <rect width="${W}" height="${H}" fill="#fff"/>
   <text x="${L - 44}" y="24" font-size="15" font-weight="600" fill="${INK}">${titleLine}</text>
   ${grid}
-  <path d="${areaPath}" fill="${color}" fill-opacity="0.10"/>
-  <path d="${linePath}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-  <circle cx="${x(pts.length - 1).toFixed(1)}" cy="${y(last.v).toFixed(1)}" r="3.5" fill="${color}"/>
+  ${series}
   ${xLabels}
   ${opts.source ? `<text x="${W - R}" y="24" font-size="9.5" fill="${MUTED}" text-anchor="end">Source: ${esc(opts.source)}</text>` : ''}
 </svg>`;

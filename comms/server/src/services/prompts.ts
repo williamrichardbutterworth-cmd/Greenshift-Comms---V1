@@ -100,6 +100,89 @@ Use only the figures and evidence provided. Keep it professional and client-read
   };
 }
 
+// ── Report assembly (§8B): AI returns an ordered section list, never raw doc ──
+
+export interface AssembleNews { source: string; title: string; summary?: string }
+export interface AssembleCustomChart { id: string; title: string; points: { label: string; value: number }[] }
+export interface AssembleContext {
+  selectedNews?: AssembleNews[];
+  includeSnapshot?: boolean;
+  dailyBrief?: string | null;
+  extraNotes?: string;
+  customCharts?: AssembleCustomChart[];
+}
+
+function assembleNewsForPrompt(news: AssembleNews[]): string {
+  return news.map((n, i) => `${i + 1}. [${n.source}] ${n.title}${n.summary ? ' — ' + n.summary : ''}`).join('\n');
+}
+
+export function reportAssemblePrompt(inputs: ReportInputs, snapshot: MarketSnapshot, ctx: AssembleContext) {
+  const refs: string[] = [];
+  if (ctx.includeSnapshot) refs.push('"marketSnapshot" — the live market metrics table');
+  refs.push('"chart:brent:12m" — a price-trend chart (series may be brent|gas|power; range may be 3m|6m|12m)');
+  if (ctx.selectedNews?.length) refs.push('"selectedNews" — the attached news headlines, as a bulleted list');
+  (ctx.customCharts ?? []).forEach((c) => refs.push(`"customChart:${c.id}" — the agent's own chart titled "${c.title}"`));
+
+  return {
+    system: HOUSE_RULES,
+    prompt: `Assemble a client energy report for ${inputs.companyName ?? 'the client'} as an ordered list of sections.
+
+Client details:
+${JSON.stringify(inputs, null, 2)}
+
+${ctx.includeSnapshot ? snapshotForPrompt(snapshot) : '(market snapshot not attached)'}
+${ctx.dailyBrief ? `\nToday's market brief (context):\n${ctx.dailyBrief}` : ''}
+${ctx.selectedNews?.length ? `\nAttached news headlines:\n${assembleNewsForPrompt(ctx.selectedNews)}` : ''}
+${ctx.extraNotes ? `\nExtra context from the agent:\n${ctx.extraNotes}` : ''}
+${inputs.agentNotes ? `\nAgent's own notes / projections:\n${inputs.agentNotes}` : ''}
+${(ctx.customCharts ?? []).length ? `\nThe agent's charts you may embed:\n${ctx.customCharts!.map((c) => `- "${c.title}" (id ${c.id}): ${c.points.map((p) => `${p.label}=${p.value}`).join(', ')}`).join('\n')}` : ''}
+
+Return ONLY JSON in exactly this shape:
+{
+  "sections": [
+    { "kind": "text",  "heading": "Executive summary", "body": "1-2 short paragraphs of plain prose" },
+    { "kind": "embed", "heading": "Market data", "ref": "<one allowed ref>" }
+  ]
+}
+
+For every "embed" section, "ref" MUST be EXACTLY one of:
+${refs.map((r) => `- ${r}`).join('\n')}
+
+Guidance:
+- Produce a clear, client-ready structure: executive summary, market context, outlook, and a tailored recommendation — embedding the attached data / charts / news where they support the argument.
+- Put a market-data or chart embed near the market context; put "selectedNews" near the end as supporting evidence.
+- Use ONLY the figures and evidence provided — never invent numbers. An "embed" merely names data to insert; do not restate those numbers in prose unless they appear in the snapshot above.
+- 6 to 10 sections total. Plain, confident UK English. The agent reviews and edits before sending.`,
+  };
+}
+
+// ── Inline AI edits on a selection / section, and chart captions ──
+export type EditAction = 'concise' | 'expand' | 'addData' | 'rewrite' | 'regenerate' | 'analyseChart';
+
+const EDIT_INSTRUCTIONS: Record<EditAction, string> = {
+  concise: 'Rewrite the passage below to be tighter and more concise, keeping every fact and the same confident voice.',
+  expand: 'Expand the passage below with one or two more sentences of relevant, non-repetitive detail. Do not invent figures.',
+  addData: 'Naturally weave ONE relevant figure from the market snapshot into the passage below. Use only the figures provided.',
+  rewrite: 'Rewrite the passage below to read more clearly and professionally for a UK business client.',
+  regenerate: 'Rewrite the passage below from scratch — same intent and facts, fresh wording, client-ready.',
+  analyseChart: 'Write ONE short, plain-English sentence stating the key takeaway from the data below, suitable as a chart caption. No preamble, no markdown.',
+};
+
+export function reportEditPrompt(action: EditAction, text: string, opts: { snapshot?: MarketSnapshot; instruction?: string }) {
+  const dataCtx = action === 'addData' && opts.snapshot ? `\n\n${snapshotForPrompt(opts.snapshot)}` : '';
+  return {
+    system: HOUSE_RULES,
+    prompt: `${EDIT_INSTRUCTIONS[action]}${opts.instruction ? ' ' + opts.instruction : ''}${dataCtx}
+
+Passage:
+"""
+${text}
+"""
+
+Return ONLY the rewritten text — no quotes, no preamble, no markdown.`,
+  };
+}
+
 export interface IdeaForSummary {
   title: string;
   details?: string;

@@ -33,3 +33,73 @@
     @apply w-full rounded-lg border border-brand-line bg-white px-3 py-2 text-sm text-brand-ink placeholder:text-brand-muted/60 focus:outline-none focus:ring-2 focus:ring-brand-green/30 focus:border-brand-green;
   }
 }
+
+/* ── Report editor canvas (TipTap / ProseMirror content) ──────────────────── */
+/* Preflight strips heading/list styling; restore a clean document look here. */
+.report-canvas {
+  outline: none;
+  color: #2b2a2e;
+  font-size: 15px;
+  line-height: 1.65;
+}
+.report-canvas:focus {
+  outline: none;
+}
+.report-canvas h2 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #2b2a2e;
+  margin: 1.4em 0 0.5em;
+  letter-spacing: 0.01em;
+}
+.report-canvas h2:first-child {
+  margin-top: 0;
+}
+.report-canvas h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #2b2a2e;
+  margin: 1.1em 0 0.4em;
+}
+.report-canvas p {
+  margin: 0 0 0.7em;
+}
+.report-canvas ul,
+.report-canvas ol {
+  margin: 0 0 0.8em;
+  padding-left: 1.4em;
+}
+.report-canvas ul {
+  list-style: disc;
+}
+.report-canvas ol {
+  list-style: decimal;
+}
+.report-canvas li {
+  margin: 0.15em 0;
+}
+.report-canvas li > p {
+  margin: 0;
+}
+.report-canvas blockquote {
+  border-left: 3px solid #e7e8e6;
+  padding-left: 0.9em;
+  margin: 0 0 0.8em;
+  color: #6b6a70;
+  font-style: italic;
+}
+.report-canvas a,
+.report-canvas .report-link {
+  color: #318300;
+  text-decoration: underline;
+  cursor: pointer;
+}
+/* Placeholder text on the empty document. */
+.report-canvas p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: #6b6a70;
+  opacity: 0.65;
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

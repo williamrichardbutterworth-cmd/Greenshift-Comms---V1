@@ -70,16 +70,80 @@ export interface PriceSeries {
   attribution?: string;
 }
 
-// ── Report blocks (the customisable report model) ──
+// ── Embedded report data shapes (used as TipTap node attrs) ──
 export interface MetricRow { label: string; value: number | string | null; unit: string; changePct?: number | null; }
 export interface ChartData { series: SeriesKey; label: string; unit: string; range: RangeKey; points: SeriesPoint[]; sourceName?: string; }
 export interface NewsRef { source: string; title: string; url?: string; }
-export type ReportBlock =
-  | { id: string; type: 'text'; heading: string; body: string }
-  | { id: string; type: 'metrics'; heading: string; rows: MetricRow[]; asOf?: string }
-  | { id: string; type: 'chart'; heading: string; chart: ChartData }
-  | { id: string; type: 'news'; heading: string; items: NewsRef[] };
 export interface ReportMeta { asOf?: string; attributions?: string[]; }
+
+// ── Report document (TipTap / ProseMirror JSON) ──
+// Loose structural types so the exporter & doc-builder can walk the document
+// without depending on TipTap itself.
+export interface DocMark { type: string; attrs?: Record<string, unknown>; }
+export interface DocNode {
+  type: string;
+  attrs?: Record<string, unknown>;
+  content?: DocNode[];
+  marks?: DocMark[];
+  text?: string;
+}
+export interface ReportDoc { type: 'doc'; content?: DocNode[]; }
+export const EMPTY_DOC: ReportDoc = { type: 'doc', content: [] };
+
+// ── Custom chart (in-app data → chart builder) ──
+export interface CustomChartPoint { label: string; value: number; }
+export interface CustomChartData {
+  title: string;
+  unit: string;
+  kind: 'line' | 'bar';
+  points: CustomChartPoint[];
+  caption?: string;
+  sourceName?: string;
+}
+
+// ── AI context tray ──
+export type ContextKind = 'clientInfo' | 'marketSnapshot' | 'dailyBrief' | 'news' | 'customChart' | 'note';
+export interface ContextItem {
+  id: string;
+  kind: ContextKind;
+  label: string;
+  news?: NewsRef[];
+  chart?: CustomChartData;
+  note?: string;
+  brief?: string;
+}
+
+// ── Saved, versioned report projects ──
+export interface ReportProjectSummary { id: string; name: string; createdAt: string; updatedAt: string; }
+export interface ReportVersion { at: string; label: string; doc: ReportDoc; inputs: ReportInputs; }
+export interface ReportProject extends ReportProjectSummary {
+  inputs: ReportInputs;
+  doc: ReportDoc;
+  context: ContextItem[];
+  versions: ReportVersion[];
+}
+export interface NewProject { name?: string; inputs?: ReportInputs; doc?: ReportDoc; context?: ContextItem[]; }
+export interface ProjectPatch {
+  name?: string; inputs?: ReportInputs; doc?: ReportDoc; context?: ContextItem[];
+  saveVersion?: boolean; versionLabel?: string;
+}
+
+// ── AI assembly (section specs) + inline edits ──
+export interface SectionText { kind: 'text'; heading?: string; body: string; }
+export interface SectionEmbed { kind: 'embed'; heading?: string; ref: string; }
+export type SectionSpec = SectionText | SectionEmbed;
+
+export interface AssembleContextPayload {
+  selectedNews?: { source: string; title: string; summary?: string }[];
+  includeSnapshot?: boolean;
+  dailyBrief?: string | null;
+  extraNotes?: string;
+  customCharts?: { id: string; title: string; points: CustomChartPoint[] }[];
+}
+export interface AssembleResult { sections: SectionSpec[]; snapshot: MarketSnapshot; provider: string; note?: string; }
+
+export type EditAction = 'concise' | 'expand' | 'addData' | 'rewrite' | 'regenerate' | 'analyseChart';
+export interface EditResult { text: string; provider: string; error?: string; }
 
 // ── Admin ideas (feedback board) ──
 export type IdeaStatus = 'new' | 'considering' | 'planned' | 'done';
@@ -129,6 +193,24 @@ export const api = {
       '/api/report/draft',
       postJson({ inputs, selectedNews }),
     ),
+  assembleReport: (inputs: ReportInputs, context: AssembleContextPayload) =>
+    j<AssembleResult>('/api/report/assemble', postJson({ inputs, context })),
+  editReport: (action: EditAction, text: string, instruction?: string) =>
+    j<EditResult>('/api/report/edit', postJson({ action, text, instruction })),
+
+  // Saved, versioned report projects (§8B).
+  projects: {
+    list: () => j<ReportProjectSummary[]>('/api/report/projects'),
+    get: (id: string) => j<ReportProject>(`/api/report/projects/${id}`),
+    create: (input: NewProject) => j<ReportProject>('/api/report/projects', postJson(input)),
+    update: (id: string, patch: ProjectPatch) =>
+      j<ReportProject>(`/api/report/projects/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      }),
+    remove: (id: string) => j<{ ok: boolean }>(`/api/report/projects/${id}`, { method: 'DELETE' }),
+  },
   ideas: () => j<Idea[]>('/api/ideas'),
   ideasMeta: () => j<IdeasMeta>('/api/ideas/meta'),
   addIdea: (input: NewIdea) => j<Idea>('/api/ideas', postJson(input)),
