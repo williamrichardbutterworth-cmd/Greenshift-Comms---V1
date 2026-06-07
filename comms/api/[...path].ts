@@ -24,6 +24,7 @@ export default async function handler(
   res: ServerResponse,
 ): Promise<void> {
   try {
+    res.setHeader('x-comms-url', String(req.url ?? '')); // debug: confirm path reaches function
     const app = await getApp();
     const method = (req.method?.toUpperCase() ?? 'GET') as Method;
 
