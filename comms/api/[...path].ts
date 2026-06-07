@@ -52,13 +52,9 @@ export default async function handler(
     }
     res.end(response.rawPayload);
   } catch (e: any) {
-    // Temporary: expose the real error so we can diagnose the serverless build.
+    console.error('[api] handler error:', e?.stack ?? e); // visible in Vercel logs
     res.statusCode = 500;
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({
-      error: 'function_error',
-      message: String(e?.message ?? e),
-      stack: String(e?.stack ?? '').split('\n').slice(0, 8),
-    }));
+    res.end(JSON.stringify({ error: 'Internal server error' }));
   }
 }
