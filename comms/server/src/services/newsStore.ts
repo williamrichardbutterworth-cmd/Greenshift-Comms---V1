@@ -175,7 +175,12 @@ export async function addHeadline(input: ArticleInput & { priority?: number }): 
   const priority = Number.isFinite(input.priority) ? Number(input.priority) : 0;
   const sb = getSupabase();
   if (sb) {
-    const { data, error } = await sb.from('headlines').insert({ ...f, priority }).select().single();
+    // `headlines` has no `note` column — insert the article fields explicitly without it.
+    const { data, error } = await sb
+      .from('headlines')
+      .insert({ title: f.title, source: f.source, url: f.url, summary: f.summary, topic: f.topic, published_at: f.published_at, priority })
+      .select()
+      .single();
     if (error) throw new Error(error.message);
     return toHeadline(data as HeadRow);
   }
