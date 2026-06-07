@@ -103,3 +103,47 @@
   height: 0;
   pointer-events: none;
 }
+
+/* ── A4 "Word-like" page: a centred white sheet on a grey deck, with faint
+   page-break guides every A4 page height (210×297mm ≈ 794×1122px @96dpi). ── */
+.report-deck {
+  background: #ECEEEC;
+  padding: 28px 18px;
+}
+.report-sheet {
+  width: 794px;
+  max-width: 100%;
+  margin: 0 auto;
+  background-color: #fff;
+  /* faint guide line at each page boundary */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 1121px,
+    rgba(43, 42, 46, 0.12) 1121px,
+    rgba(43, 42, 46, 0.12) 1122px
+  );
+  box-shadow: 0 1px 2px rgba(43, 42, 46, 0.06), 0 12px 34px rgba(43, 42, 46, 0.12);
+  border-radius: 2px;
+  min-height: 1122px;
+  padding: 64px 72px;
+}
+.report-sheet .report-canvas {
+  min-height: 980px; /* fill the first page so the whole sheet is clickable */
+}
+/* Embedded blocks read as inserted objects, not page-coloured cards. */
+.report-sheet .report-canvas .card {
+  box-shadow: none;
+}
+/* Embedded images / media. */
+.report-canvas img,
+.report-canvas .report-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 0.6em 0;
+}
+.report-canvas img.ProseMirror-selectednode {
+  outline: 2px solid #40a800;
+  outline-offset: 2px;
+}

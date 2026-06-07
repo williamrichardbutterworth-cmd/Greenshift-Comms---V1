@@ -2,7 +2,7 @@ import { getAI } from '../providers/ai';
 import { aiConfigured } from '../config';
 import { getMarketSnapshot } from '../providers/marketData';
 import {
-  reportNarrativePrompt, reportAssemblePrompt, reportEditPrompt,
+  reportNarrativePrompt, reportAssemblePrompt, reportEditPrompt, transcriptExtractPrompt,
   type ReportInputs, type AssembleContext, type EditAction,
 } from './prompts';
 import type { NewsItem } from '../providers/news/types';
@@ -124,5 +124,31 @@ export async function editText(
     return { text: out.trim() || text, provider: ai.name };
   } catch (e) {
     return { text, provider: 'error', error: (e as Error).message };
+  }
+}
+
+// Mine a pasted call transcript for report-relevant client details. Never throws.
+const PROFILE_KEYS = ['companyName', 'clientName', 'contact', 'sites', 'currentSupplier', 'contractEnd', 'consumption'];
+
+export async function extractTranscript(
+  transcript: string,
+): Promise<{ profile: Record<string, string>; points: string[]; provider: string; error?: string }> {
+  if (!transcript.trim()) return { profile: {}, points: [], provider: 'none' };
+  if (!aiConfigured()) return { profile: {}, points: [], provider: 'none', error: 'Automatic extraction isn’t configured.' };
+  try {
+    const ai = getAI();
+    const { system, prompt } = transcriptExtractPrompt(transcript);
+    const res = await ai.generateJSON<{ profile?: Record<string, unknown>; points?: unknown }>({ system, prompt, maxTokens: 1200 });
+    const profile: Record<string, string> = {};
+    for (const k of PROFILE_KEYS) {
+      const v = res.profile?.[k];
+      if (typeof v === 'string' && v.trim()) profile[k] = v.trim().slice(0, 300);
+    }
+    const points = Array.isArray(res.points)
+      ? res.points.filter((p) => typeof p === 'string' && p.trim()).map((p) => String(p).slice(0, 400)).slice(0, 8)
+      : [];
+    return { profile, points, provider: ai.name };
+  } catch (e) {
+    return { profile: {}, points: [], provider: 'error', error: (e as Error).message };
   }
 }

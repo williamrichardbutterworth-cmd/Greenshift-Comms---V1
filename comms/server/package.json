@@ -16,9 +16,11 @@
     "@supabase/supabase-js": "^2.45.4",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
+    "mammoth": "^1.12.0",
     "node-cron": "^3.0.3",
     "openai": "^4.67.3",
-    "rss-parser": "^3.13.0"
+    "rss-parser": "^3.13.0",
+    "unpdf": "^1.6.2"
   },
   "devDependencies": {
     "@types/node": "^22.7.5",

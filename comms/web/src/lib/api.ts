@@ -145,6 +145,22 @@ export interface AssembleResult { sections: SectionSpec[]; snapshot: MarketSnaps
 export type EditAction = 'concise' | 'expand' | 'addData' | 'rewrite' | 'regenerate' | 'analyseChart';
 export interface EditResult { text: string; provider: string; error?: string; }
 
+// ── Reusable client profiles ──
+export interface ClientProfile { id: string; name: string; inputs: ReportInputs; createdAt: string; }
+export interface NewClientProfile { name?: string; inputs?: ReportInputs; }
+
+// ── Uploaded files / media ──
+export interface ClientFile {
+  id: string; clientProfileId: string | null; projectId: string | null;
+  name: string; mime: string; size: number; storagePath: string; extractedText: string; createdAt: string;
+}
+export interface NewFileUpload {
+  name: string; mime?: string; projectId?: string | null; clientProfileId?: string | null; dataBase64: string;
+}
+
+// ── Call-transcript extraction ──
+export interface TranscriptExtract { profile: Partial<ReportInputs>; points: string[]; provider: string; error?: string; }
+
 // ── Admin ideas (feedback board) ──
 export type IdeaStatus = 'new' | 'considering' | 'planned' | 'done';
 export interface Idea {
@@ -211,6 +227,30 @@ export const api = {
       }),
     remove: (id: string) => j<{ ok: boolean }>(`/api/report/projects/${id}`, { method: 'DELETE' }),
   },
+
+  // Reusable client profiles.
+  profiles: {
+    list: () => j<ClientProfile[]>('/api/client-profiles'),
+    get: (id: string) => j<ClientProfile>(`/api/client-profiles/${id}`),
+    create: (input: NewClientProfile) => j<ClientProfile>('/api/client-profiles', postJson(input)),
+    update: (id: string, input: NewClientProfile) =>
+      j<ClientProfile>(`/api/client-profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
+    remove: (id: string) => j<{ ok: boolean }>(`/api/client-profiles/${id}`, { method: 'DELETE' }),
+  },
+
+  // Uploaded report files / media.
+  files: {
+    list: (params: { projectId?: string; clientProfileId?: string }) => {
+      const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][]).toString();
+      return j<ClientFile[]>(`/api/report/files${qs ? `?${qs}` : ''}`);
+    },
+    upload: (input: NewFileUpload) => j<ClientFile>('/api/report/files', postJson(input)),
+    remove: (id: string) => j<{ ok: boolean }>(`/api/report/files/${id}`, { method: 'DELETE' }),
+    downloadUrl: (id: string) => `/api/report/files/${id}/download`,
+  },
+
+  // Mine a pasted call transcript for client details.
+  extractTranscript: (transcript: string) => j<TranscriptExtract>('/api/report/transcript-extract', postJson({ transcript })),
   ideas: () => j<Idea[]>('/api/ideas'),
   ideasMeta: () => j<IdeasMeta>('/api/ideas/meta'),
   addIdea: (input: NewIdea) => j<Idea>('/api/ideas', postJson(input)),

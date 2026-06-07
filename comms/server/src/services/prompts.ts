@@ -183,6 +183,28 @@ Return ONLY the rewritten text — no quotes, no preamble, no markdown.`,
   };
 }
 
+// Mine a pasted call transcript for report-relevant client details.
+export function transcriptExtractPrompt(transcript: string) {
+  return {
+    system: HOUSE_RULES,
+    prompt: `Read this transcript of a call between a Green Shift energy agent and a UK business. Extract ONLY details that are clearly stated and useful for a client energy report. Never invent or infer beyond what is said.
+
+Transcript:
+"""
+${transcript.slice(0, 12000)}
+"""
+
+Return ONLY JSON in exactly this shape:
+{
+  "profile": {
+    "companyName": "", "contact": "", "sites": "", "currentSupplier": "", "contractEnd": "", "consumption": ""
+  },
+  "points": ["a concise, report-relevant point actually raised on the call — a goal, pain point, renewal driver or objection"]
+}
+Leave any profile field as an empty string if it was not clearly stated. Provide 0-8 points. Plain UK English.`,
+  };
+}
+
 export interface IdeaForSummary {
   title: string;
   details?: string;

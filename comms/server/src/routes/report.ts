@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { draftReport, assembleReport, editText, type ReportInputs } from '../services/reportGenerator';
+import { draftReport, assembleReport, editText, extractTranscript, type ReportInputs } from '../services/reportGenerator';
 import type { AssembleContext, EditAction } from '../services/prompts';
 import type { NewsItem } from '../providers/news/types';
 
@@ -21,5 +21,11 @@ export async function reportRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/report/edit', async (req) => {
     const body = req.body as { action?: EditAction; text?: string; instruction?: string };
     return editText(body.action ?? 'rewrite', body.text ?? '', { instruction: body.instruction });
+  });
+
+  // Mine a pasted call transcript for report-relevant client details.
+  app.post('/api/report/transcript-extract', async (req) => {
+    const body = req.body as { transcript?: string };
+    return extractTranscript(body.transcript ?? '');
   });
 }

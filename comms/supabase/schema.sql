@@ -59,3 +59,27 @@ create table if not exists public.client_profiles (
 );
 
 alter table public.client_profiles enable row level security;
+
+
+-- ─────────────────────── Uploaded files / media (§8B Batch 2) ────────────────
+-- Metadata for files uploaded into a report (PDFs, Word docs, images). The file
+-- bytes live in Supabase Storage (bucket `report-files`) in production, or in
+-- server/data/uploads/ locally. `extracted_text` is the mined text used as
+-- report context. Create the Storage bucket once (private):
+--   Supabase → Storage → New bucket → name "report-files", Public = off.
+
+create table if not exists public.client_files (
+  id                uuid        primary key default gen_random_uuid(),
+  client_profile_id uuid,
+  project_id        uuid,
+  name              text        not null,
+  mime              text        not null default '',
+  size              integer     not null default 0,
+  storage_path      text        not null,
+  extracted_text    text        not null default '',
+  created_at        timestamptz not null default now()
+);
+
+create index if not exists client_files_project_idx on public.client_files (project_id, created_at desc);
+
+alter table public.client_files enable row level security;

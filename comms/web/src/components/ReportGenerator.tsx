@@ -2,13 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import {
   Sparkles, Download, FileText, Trash2, FilePlus2, History, Save, FolderOpen, Pencil, RotateCcw,
+  Paperclip, Loader2,
 } from 'lucide-react';
 import {
   api, EMPTY_DOC,
   type NewsItem, type ReportInputs, type MarketSnapshot, type ReportDoc,
-  type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef,
+  type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile,
 } from '../lib/api';
 import { CommsEditor } from '../editor/CommsEditor';
+import { ClientProfileForm } from './ClientProfileForm';
 import { buildDocFromSections } from '../lib/buildDocFromSections';
 
 const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] = [
@@ -55,6 +57,10 @@ export function ReportGenerator() {
   const [showVersions, setShowVersions] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const [creating, setCreating] = useState(false);
+  const [files, setFiles] = useState<ClientFile[]>([]);
+  const [uploading, setUploading] = useState(false);
+
   const refreshProjects = () => api.projects.list().then(setProjects).catch(() => {});
 
   useEffect(() => {
@@ -87,22 +93,22 @@ export function ReportGenerator() {
   const setField = (k: keyof ReportInputs, v: string) => { markDirty(); setInputs((s) => ({ ...s, [k]: v })); };
 
   // ── Project lifecycle ──
-  const resetTransient = () => { setSnapshot(null); setProvider(''); setSelected(new Set()); setShowVersions(false); setErr(null); setCtxNotes(''); };
+  const resetTransient = () => { setSnapshot(null); setProvider(''); setSelected(new Set()); setShowVersions(false); setErr(null); setCtxNotes(''); setFiles([]); };
+  const loadFiles = (projectId: string) => api.files.list({ projectId }).then(setFiles).catch(() => setFiles([]));
 
-  const newProject = async () => {
-    try {
-      const p = await api.projects.create({ name: 'Untitled report', inputs: {}, doc: EMPTY_DOC });
-      dirty.current = false;
-      setCurrent(p); setInputs(p.inputs); setDoc(p.doc); setDocKey(p.id);
-      resetTransient(); refreshProjects();
-    } catch (e) { setErr(String((e as Error).message)); }
+  // New report → client-profile step → enter the freshly-created project.
+  const onProfileDone = (p: ReportProject) => {
+    dirty.current = false;
+    setCreating(false);
+    setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
+    resetTransient(); loadFiles(p.id); refreshProjects();
   };
   const openProject = async (id: string) => {
     try {
       const p = await api.projects.get(id);
       dirty.current = false;
       setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
-      resetTransient();
+      resetTransient(); loadFiles(p.id);
     } catch (e) { setErr(String((e as Error).message)); }
   };
   const renameProject = async () => {
@@ -144,6 +150,34 @@ export function ReportGenerator() {
     setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const selectedNews = () => news.filter((n) => selected.has(n.id));
 
+  // ── Files & media: upload (extract text server-side), embed images, remove ──
+  const onUpload = async (fileList: FileList | null) => {
+    if (!fileList || !current) return;
+    setUploading(true); setErr(null);
+    try {
+      for (const file of Array.from(fileList)) {
+        const dataUrl = await new Promise<string>((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result as string);
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+        const base64 = dataUrl.split(',')[1] ?? '';
+        const saved = await api.files.upload({ name: file.name, mime: file.type, dataBase64: base64, projectId: current.id });
+        setFiles((f) => [saved, ...f]);
+        if (file.type.startsWith('image/')) editorRef.current?.chain().focus().setImage({ src: dataUrl }).run();
+      }
+    } catch (e) {
+      setErr(String((e as Error).message));
+    } finally {
+      setUploading(false);
+    }
+  };
+  const removeUpload = async (id: string) => {
+    try { await api.files.remove(id); setFiles((f) => f.filter((x) => x.id !== id)); }
+    catch (e) { setErr(String((e as Error).message)); }
+  };
+
   const assemble = async () => {
     if (!current) return;
     if (docHasContent(doc) && !window.confirm('Assembling a draft will replace the current document. Continue?')) return;
@@ -152,11 +186,15 @@ export function ReportGenerator() {
       let dailyBrief: string | null = null;
       if (ctxBrief) { try { dailyBrief = (await api.dailyReview()).review ?? null; } catch { /* ignore */ } }
       const sel = selectedNews();
+      const fileNotes = files
+        .filter((f) => f.extractedText.trim())
+        .map((f) => `From “${f.name}”:\n${f.extractedText.slice(0, 3000)}`)
+        .join('\n\n');
       const res = await api.assembleReport(inputs, {
         selectedNews: sel.map((n) => ({ source: n.source, title: n.title, summary: n.summary })),
         includeSnapshot: ctxSnapshot,
         dailyBrief,
-        extraNotes: ctxNotes,
+        extraNotes: [ctxNotes, fileNotes].filter(Boolean).join('\n\n'),
       });
       setSnapshot(res.snapshot); setProvider(res.provider);
       if (res.provider === 'error' && res.note) {
@@ -200,13 +238,15 @@ export function ReportGenerator() {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-6">
+    <>
+      {creating && <ClientProfileForm onDone={onProfileDone} onCancel={() => setCreating(false)} />}
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-6">
       {/* ── Left: projects + client profile + evidence ── */}
       <div className="space-y-5">
         <div className="card p-3">
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-semibold">Reports</h2>
-            <button className="btn-ghost !py-1 !px-2 text-xs" onClick={newProject}><FilePlus2 size={13} /> New</button>
+            <button className="btn-ghost !py-1 !px-2 text-xs" onClick={() => setCreating(true)}><FilePlus2 size={13} /> New</button>
           </div>
           <div className="space-y-0.5 max-h-56 overflow-auto">
             {projects.map((p) => (
@@ -289,6 +329,27 @@ export function ReportGenerator() {
             </div>
 
             <div>
+              <h3 className="label mb-2">Files &amp; media</h3>
+              <label className="btn-ghost w-full cursor-pointer justify-center">
+                {uploading ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />} Upload file or image
+                <input type="file" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ''; }} />
+              </label>
+              {files.length > 0 && (
+                <div className="space-y-1 mt-2 max-h-40 overflow-auto">
+                  {files.map((f) => (
+                    <div key={f.id} className="flex items-center gap-2 text-xs">
+                      <FileText size={12} className="text-brand-muted shrink-0" />
+                      <span className="flex-1 truncate" title={f.name}>{f.name}</span>
+                      {f.extractedText && <span className="text-[10px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0" title="Text extracted for the draft">context</span>}
+                      <button className="text-brand-muted hover:text-up shrink-0" onClick={() => removeUpload(f.id)} title="Remove"><Trash2 size={12} /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-[11px] text-brand-muted mt-1.5">PDFs &amp; Word docs are mined for context; images embed into the page.</p>
+            </div>
+
+            <div>
               <button className="btn-primary w-full" onClick={assemble} disabled={drafting}>
                 <Sparkles size={16} /> {drafting ? 'Assembling…' : 'Assemble draft'}
               </button>
@@ -309,7 +370,7 @@ export function ReportGenerator() {
           <div className="card p-10 text-center text-brand-muted">
             <FileText size={28} className="mx-auto mb-2 opacity-50" />
             Create or open a report to start writing.
-            <div className="mt-3"><button className="btn-primary" onClick={newProject}><FilePlus2 size={16} /> New report</button></div>
+            <div className="mt-3"><button className="btn-primary" onClick={() => setCreating(true)}><FilePlus2 size={16} /> New report</button></div>
           </div>
         ) : (
           <>
@@ -358,6 +419,7 @@ export function ReportGenerator() {
           </>
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 }

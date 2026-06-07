@@ -6,13 +6,17 @@ import { reviewRoutes } from './routes/review';
 import { newsRoutes } from './routes/news';
 import { reportRoutes } from './routes/report';
 import { reportProjectRoutes } from './routes/reportProjects';
+import { clientProfileRoutes } from './routes/clientProfiles';
+import { fileRoutes } from './routes/files';
 import { ideasRoutes } from './routes/ideas';
 
 // Builds the Fastify app WITHOUT listening or starting the scheduler, so the
 // exact same app can run as a long-lived local server (index.ts) or be wrapped
 // in a single Vercel serverless function (../../api/[...path].ts).
 export async function buildApp(): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 });
+  // 8MB body cap leaves room for base64 file uploads (Vercel still caps the
+  // request at ~4.5MB on Hobby, so practical uploads are ~3MB).
+  const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
   await app.register(cors, { origin: true }); // harmless: API is same-origin on Vercel
 
   app.get('/api/health', async () => ({
@@ -27,6 +31,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(newsRoutes);
   await app.register(reportRoutes);
   await app.register(reportProjectRoutes);
+  await app.register(clientProfileRoutes);
+  await app.register(fileRoutes);
   await app.register(ideasRoutes);
 
   return app;

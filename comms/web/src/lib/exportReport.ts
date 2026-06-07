@@ -275,6 +275,18 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
     }
   };
 
+  const pdfImage = async (node: DocNode) => {
+    const src = node.attrs?.src as string | undefined;
+    if (!src) return;
+    const img = await loadImage(src);
+    if (!img || img.w < 8 || img.h < 8) return; // ignore degenerate/pinprick images (jsPDF's compressor hangs on them)
+    const w = Math.min(cW, img.w);
+    const h = (img.h / img.w) * w;
+    ensure(h + 8);
+    pdf.addImage(img.dataUrl, img.dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG', M, y, w, h, undefined, 'MEDIUM');
+    y += h + 8;
+  };
+
   for (const node of nodes(doc)) {
     switch (node.type) {
       case 'heading': pdfHeading(node); break;
@@ -290,6 +302,7 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
         break;
       }
       case 'newsList': pdfNews((node.attrs?.items as NewsRef[]) ?? []); break;
+      case 'image': await pdfImage(node); break;
       default: if (node.content?.length) pdfParagraph(node);
     }
     y += 6;
@@ -410,6 +423,18 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
       case 'newsList': {
         for (const it of (node.attrs?.items as NewsRef[]) ?? []) {
           children.push(new Paragraph({ bullet: { level: 0 }, spacing: { after: 40 }, children: [new TextRun({ text: `${it.source}: `, bold: true }), new TextRun({ text: it.title })] }));
+        }
+        break;
+      }
+      case 'image': {
+        const src = node.attrs?.src as string | undefined;
+        if (src) {
+          const img = await loadImage(src);
+          if (img && img.w >= 8 && img.h >= 8) {
+            const w = Math.min(540, img.w);
+            const h = Math.round((img.h / img.w) * w);
+            children.push(new Paragraph({ children: [new ImageRun({ type: img.dataUrl.startsWith('data:image/png') ? 'png' : 'jpg', data: dataUrlToBytes(img.dataUrl), transformation: { width: w, height: h } })] }));
+          }
         }
         break;
       }

@@ -3,6 +3,7 @@ import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
+import Image from '@tiptap/extension-image';
 import {
   Bold, Italic, Heading2, Heading3, List, ListOrdered, Quote, Link2,
   Table2, LineChart as LineChartIcon, BarChart3, Newspaper, Plus,
@@ -28,6 +29,7 @@ export const editorExtensions = [
   StarterKit.configure({ heading: { levels: [2, 3] } }),
   Link.configure({ openOnClick: false, autolink: true, HTMLAttributes: { rel: 'noopener', class: 'report-link' } }),
   Placeholder.configure({ placeholder: 'Start writing, or attach context on the left and click “Assemble draft”…' }),
+  Image.configure({ inline: false, allowBase64: true, HTMLAttributes: { class: 'report-image' } }),
   MetricsTable,
   PriceChart,
   NewsList,
@@ -182,11 +184,13 @@ export function CommsEditor({
 
       {aiErr && <div className="px-3 py-1.5 text-xs text-up bg-brand-tint border-b border-brand-line">{aiErr}</div>}
 
-      {/* The document canvas */}
-      <EditorContent editor={editor} className="report-canvas-wrap px-6 py-5 min-h-[60vh] max-h-[72vh] overflow-auto" />
+      {/* The A4 document canvas */}
+      <div className="report-deck max-h-[74vh] overflow-auto">
+        <EditorContent editor={editor} className="report-sheet" />
+      </div>
 
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-t border-brand-line text-[11px] text-brand-muted">
-        <Plus size={12} /> Type to write · use the toolbar to format · drag the handle on any block to reorder
+        <Plus size={12} /> A4 page · type to write, format with the toolbar, drag the handle on any block to reorder
       </div>
     </div>
   );
