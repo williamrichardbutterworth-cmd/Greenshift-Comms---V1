@@ -10,7 +10,7 @@ let appPromise: Promise<any> | null = null;
 function getApp(): Promise<any> {
   if (!appPromise) {
     appPromise = (async () => {
-      const { buildApp } = await import('../server/src/app');
+      const { buildApp } = await import('../server/dist/app.js');
       const app = await buildApp();
       await app.ready();
       return app;
