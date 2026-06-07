@@ -29,7 +29,7 @@ export async function draftReport(
   const snapshot = await getMarketSnapshot();
   if (!aiConfigured()) {
     const placeholder: ReportNarrative = {
-      executiveSummary: '[Set up an AI provider to auto-draft this, or write it here.]',
+      executiveSummary: '[Set up automatic drafting to fill this in, or write it here.]',
       marketContext: '[Market context…]',
       outlook: '[Outlook…]',
       recommendation: '[Recommendation…]',
@@ -79,7 +79,7 @@ function sanitiseSections(raw: unknown, ctx: AssembleContext): SectionSpec[] {
 
 function placeholderSections(ctx: AssembleContext): SectionSpec[] {
   return [
-    { kind: 'text', heading: 'Executive summary', body: '[Write the executive summary here, or use “Assemble with AI” once a working AI key is configured.]' },
+    { kind: 'text', heading: 'Executive summary', body: '[Write the executive summary here, or use “Assemble draft” once automatic drafting is configured.]' },
     { kind: 'text', heading: 'Market context', body: '[Summarise where gas & power are and what is driving them.]' },
     ...(ctx.includeSnapshot ? [{ kind: 'embed' as const, heading: 'Market data', ref: 'marketSnapshot' }] : []),
     { kind: 'text', heading: 'Outlook', body: '[Balanced outlook — no over-promising.]' },
@@ -99,7 +99,7 @@ export async function assembleReport(
     const { system, prompt } = reportAssemblePrompt(inputs, snapshot, ctx);
     const res = await ai.generateJSON<{ sections: unknown }>({ system, prompt, maxTokens: 2400 });
     const sections = sanitiseSections(res.sections, ctx);
-    if (!sections.length) return { sections: placeholderSections(ctx), snapshot, provider: ai.name, note: 'AI returned no usable sections.' };
+    if (!sections.length) return { sections: placeholderSections(ctx), snapshot, provider: ai.name, note: 'The draft came back empty.' };
     return { sections, snapshot, provider: ai.name };
   } catch (e) {
     // Billing / rate-limit / network: keep the report usable rather than 500.
@@ -115,7 +115,7 @@ export async function editText(
   opts: { instruction?: string } = {},
 ): Promise<{ text: string; provider: string; error?: string }> {
   if (!text.trim()) return { text, provider: 'none' };
-  if (!aiConfigured()) return { text, provider: 'none', error: 'AI not configured.' };
+  if (!aiConfigured()) return { text, provider: 'none', error: 'Automatic drafting isn’t configured.' };
   try {
     const ai = getAI();
     const snapshot = action === 'addData' ? await getMarketSnapshot() : undefined;

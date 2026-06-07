@@ -134,13 +134,13 @@ export function IdeasBoard() {
             ))}
           </div>
           <button className="btn-ghost" onClick={summarise} disabled={summarising || !ideas.length}>
-            <Sparkles size={15} /> {summarising ? 'Summarising…' : 'Summarise themes (AI)'}
+            <Sparkles size={15} /> {summarising ? 'Summarising…' : 'Summarise themes'}
           </button>
         </div>
 
         {summary && (
           <div className="card p-4 bg-brand-tint/60 border-brand-line">
-            <div className="label mb-1 flex items-center gap-1.5"><Sparkles size={13} className="text-brand-greenDark" /> AI roadmap digest</div>
+            <div className="label mb-1 flex items-center gap-1.5"><Sparkles size={13} className="text-brand-greenDark" /> Roadmap digest</div>
             <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-brand-ink">{summary}</pre>
           </div>
         )}

@@ -131,7 +131,7 @@ function CustomChartView({ node, updateAttributes, deleteNode, selected }: NodeV
             className="btn-ghost !py-1 text-sm shrink-0"
             onClick={analyse}
             disabled={analysing || !chartData.length}
-            title="Let AI write a one-line caption from your data"
+            title="Auto-write a one-line caption from your data"
           >
             {analysing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Analyse
           </button>

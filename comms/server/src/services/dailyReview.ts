@@ -31,10 +31,10 @@ export async function getDailyReview(force = false): Promise<DailyReview> {
       configured: false,
       asOf: new Date().toISOString(),
       review:
-        'AI is not configured yet. Add an ANTHROPIC_API_KEY (or set AI_PROVIDER=openai with an OPENAI_API_KEY) in server/.env, then refresh to generate today\'s brief automatically.',
+        'Automatic briefing isn\'t set up yet. Add an ANTHROPIC_API_KEY (or set AI_PROVIDER=openai with an OPENAI_API_KEY) in server/.env, then refresh to generate today\'s brief.',
       talkingPoints: [],
-      geoHooks: news.slice(0, 3).map((n) => ({ headline: n.title, angle: 'Enable AI to auto-generate a call angle.' })),
-      note: 'Set up an AI provider to unlock the daily brief and talking points.',
+      geoHooks: news.slice(0, 3).map((n) => ({ headline: n.title, angle: 'Set up automatic briefing to generate a call angle.' })),
+      note: 'Set up automatic briefing to unlock the daily brief and talking points.',
     };
   }
 

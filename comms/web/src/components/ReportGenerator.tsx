@@ -146,7 +146,7 @@ export function ReportGenerator() {
 
   const assemble = async () => {
     if (!current) return;
-    if (docHasContent(doc) && !window.confirm('Assemble with AI will replace the current document with a fresh draft. Continue?')) return;
+    if (docHasContent(doc) && !window.confirm('Assembling a draft will replace the current document. Continue?')) return;
     setDrafting(true); setErr(null);
     try {
       let dailyBrief: string | null = null;
@@ -160,7 +160,7 @@ export function ReportGenerator() {
       });
       setSnapshot(res.snapshot); setProvider(res.provider);
       if (res.provider === 'error' && res.note) {
-        setErr(`AI unavailable (${res.note.slice(0, 150)}). Built an editable skeleton you can fill in.`);
+        setErr(`Auto-drafting unavailable (${res.note.slice(0, 150)}). Built an editable skeleton you can fill in.`);
       }
       const built = buildDocFromSections(res.sections, { snapshot: res.snapshot, selectedNews: sel.map(toRef) });
       markDirty();
@@ -253,7 +253,7 @@ export function ReportGenerator() {
             </div>
 
             <div>
-              <h3 className="label mb-2">AI context</h3>
+              <h3 className="label mb-2">Context</h3>
               <div className="space-y-2 text-sm">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" className="accent-brand-green" checked={ctxSnapshot} onChange={(e) => setCtxSnapshot(e.target.checked)} />
@@ -264,7 +264,7 @@ export function ReportGenerator() {
                   Include today’s market brief
                 </label>
                 <div>
-                  <label className="label block mb-1">Extra context for the AI</label>
+                  <label className="label block mb-1">Extra context</label>
                   <textarea
                     className="input min-h-[56px]"
                     placeholder="Anything else to weave in…"
@@ -290,10 +290,10 @@ export function ReportGenerator() {
 
             <div>
               <button className="btn-primary w-full" onClick={assemble} disabled={drafting}>
-                <Sparkles size={16} /> {drafting ? 'Assembling…' : 'Assemble with AI'}
+                <Sparkles size={16} /> {drafting ? 'Assembling…' : 'Assemble draft'}
               </button>
               {provider === 'none' && (
-                <p className="text-xs text-brand-muted mt-1.5">AI not configured — a structured skeleton is built that you can fill in and format.</p>
+                <p className="text-xs text-brand-muted mt-1.5">Automatic drafting isn’t set up — a structured skeleton is built that you can fill in and format.</p>
               )}
               <p className="text-[11px] text-brand-muted mt-1.5">Assembling replaces the document with a fresh draft from the context above.</p>
             </div>
@@ -353,7 +353,7 @@ export function ReportGenerator() {
               </button>
             </div>
             <p className="text-[11px] text-brand-muted">
-              AI-drafted — review and edit before sending. Prices are indicative, not a quotation; general market commentary, not financial advice.
+              Auto-drafted — review and edit before sending. Prices are indicative, not a quotation; general market commentary, not financial advice.
             </p>
           </>
         )}

@@ -49,7 +49,7 @@ export async function ideasRoutes(app: FastifyInstance): Promise<void> {
     const ideas = await listIdeas();
     if (!ideas.length) return { configured: aiConfigured(), summary: 'No ideas yet — add the first one above.' };
     if (!aiConfigured()) {
-      return { configured: false, summary: 'Add an AI key (server/.env) to auto-summarise themes and priorities.' };
+      return { configured: false, summary: 'Add a provider key (server/.env) to auto-summarise themes and priorities.' };
     }
     const ai = getAI();
     const { system, prompt } = ideasSummaryPrompt(ideas);

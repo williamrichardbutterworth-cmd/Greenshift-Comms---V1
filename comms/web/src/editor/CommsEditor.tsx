@@ -20,14 +20,14 @@ const AI_ACTIONS: { action: EditAction; label: string }[] = [
   { action: 'concise', label: 'Make concise' },
   { action: 'expand', label: 'Expand' },
   { action: 'addData', label: 'Add a market figure' },
-  { action: 'rewrite', label: 'Rewrite' },
+  { action: 'rewrite', label: 'Reword' },
   { action: 'regenerate', label: 'Regenerate' },
 ];
 
 export const editorExtensions = [
   StarterKit.configure({ heading: { levels: [2, 3] } }),
   Link.configure({ openOnClick: false, autolink: true, HTMLAttributes: { rel: 'noopener', class: 'report-link' } }),
-  Placeholder.configure({ placeholder: 'Start writing, or attach context on the left and click “Assemble with AI”…' }),
+  Placeholder.configure({ placeholder: 'Start writing, or attach context on the left and click “Assemble draft”…' }),
   MetricsTable,
   PriceChart,
   NewsList,
@@ -129,7 +129,7 @@ export function CommsEditor({
     setAiAction(action);
     try {
       const res = await api.editReport(action, text);
-      if (res.error) setAiErr(`AI unavailable: ${res.error.slice(0, 140)}`);
+      if (res.error) setAiErr(`Rewrite unavailable: ${res.error.slice(0, 140)}`);
       else if (res.text && res.text !== text) editor.chain().focus().insertContentAt({ from, to }, res.text).run();
     } catch (e) {
       setAiErr(String((e as Error).message).slice(0, 160));
@@ -155,12 +155,12 @@ export function CommsEditor({
         <div className="relative">
           <button
             type="button"
-            title="AI edit the selected text (or current paragraph)"
+            title="Rewrite the selected text (or current paragraph)"
             onClick={() => setAiOpen((o) => !o)}
             disabled={!!aiAction}
             className="inline-flex items-center gap-1 h-8 px-2 rounded-md border text-sm bg-white text-brand-greenDark border-brand-line hover:bg-brand-tint disabled:opacity-50"
           >
-            {aiAction ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} AI <ChevronDown size={12} />
+            {aiAction ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Rewrite <ChevronDown size={12} />
           </button>
           {aiOpen && (
             <div className="absolute left-0 mt-1 w-48 card p-1 z-20" onMouseLeave={() => setAiOpen(false)}>
