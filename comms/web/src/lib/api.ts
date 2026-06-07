@@ -231,6 +231,7 @@ export const api = {
   savedArticles: {
     list: () => j<SavedArticle[]>('/api/news/articles'),
     save: (input: ArticleInput) => j<SavedArticle>('/api/news/articles', postJson(input)),
+    fromUrl: (url: string) => j<SavedArticle>('/api/news/articles/from-url', postJson({ url })),
     remove: (id: string) => j<{ ok: boolean }>(`/api/news/articles/${id}`, { method: 'DELETE' }),
   },
   headlines: {

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import type { Editor } from '@tiptap/react';
 import {
   Sparkles, Download, FileText, Trash2, FilePlus2, History, Save, FolderOpen, Pencil, RotateCcw,
-  Paperclip, Loader2,
+  Paperclip, Loader2, ChevronDown, Building2, Library, PenLine, Link2, Plus,
 } from 'lucide-react';
 import {
   api, EMPTY_DOC,
@@ -10,7 +10,9 @@ import {
   type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle,
 } from '../lib/api';
 import { CommsEditor } from '../editor/CommsEditor';
+import { PageOverview } from '../editor/PageOverview';
 import { ClientProfileForm } from './ClientProfileForm';
+import { CollapsibleSection } from './CollapsibleSection';
 import { buildDocFromSections } from '../lib/buildDocFromSections';
 
 const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] = [
@@ -24,11 +26,8 @@ const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] 
 ];
 
 const toRef = (n: NewsItem): NewsRef => ({ source: n.source, title: n.title, url: n.url });
-
 const docHasMarketData = (doc: ReportDoc): boolean =>
   (doc.content ?? []).some((n) => n.type === 'metricsTable' || n.type === 'priceChart');
-
-// A document is "non-empty" if it has anything beyond a single blank paragraph.
 const docHasContent = (doc: ReportDoc): boolean =>
   (doc.content ?? []).some((n) => n.type !== 'paragraph' || (n.content?.length ?? 0) > 0);
 
@@ -39,6 +38,7 @@ export function ReportGenerator() {
   const [doc, setDoc] = useState<ReportDoc>(EMPTY_DOC);
   const [docKey, setDocKey] = useState('none');
   const editorRef = useRef<Editor | null>(null);
+  const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
   const dirty = useRef(false);
 
   const [news, setNews] = useState<NewsItem[]>([]);
@@ -46,7 +46,6 @@ export function ReportGenerator() {
   const [snapshot, setSnapshot] = useState<MarketSnapshot | null>(null);
   const [provider, setProvider] = useState('');
 
-  // AI context tray (assembly inputs — not part of the saved document)
   const [ctxSnapshot, setCtxSnapshot] = useState(true);
   const [ctxBrief, setCtxBrief] = useState(false);
   const [ctxNotes, setCtxNotes] = useState('');
@@ -55,37 +54,39 @@ export function ReportGenerator() {
   const [exporting, setExporting] = useState<'pdf' | 'docx' | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [showVersions, setShowVersions] = useState(false);
+  const [showOpen, setShowOpen] = useState(false);
+  const [showExport, setShowExport] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [refUrl, setRefUrl] = useState('');
+  const [addingUrl, setAddingUrl] = useState(false);
 
   const refreshProjects = () => api.projects.list().then(setProjects).catch(() => {});
 
-  useEffect(() => {
-    refreshProjects();
-    // Evidence = the saved-article library (pinned for reference) + the live feed.
-    Promise.all([
-      api.news(10).catch(() => [] as NewsItem[]),
-      api.savedArticles.list().catch(() => [] as SavedArticle[]),
-    ]).then(([liveItems, saved]) => {
-      const fromLib: NewsItem[] = saved.map((a) => ({
-        id: `lib-${a.id}`, title: a.title, source: a.source || 'Saved', url: a.url,
-        publishedAt: a.publishedAt ?? '', summary: a.summary, topic: a.topic,
-      }));
-      const seen = new Set<string>();
-      const merged = [...fromLib, ...liveItems].filter((n) => {
-        const k = n.title.toLowerCase();
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-      setNews(merged);
-    });
-  }, []);
+  // References = saved-article library + the live feed (deduped by title).
+  const reloadEvidence = () => Promise.all([
+    api.news(10).catch(() => [] as NewsItem[]),
+    api.savedArticles.list().catch(() => [] as SavedArticle[]),
+  ]).then(([liveItems, saved]) => {
+    const fromLib: NewsItem[] = saved.map((a) => ({
+      id: `lib-${a.id}`, title: a.title, source: a.source || 'Saved', url: a.url,
+      publishedAt: a.publishedAt ?? '', summary: a.summary, topic: a.topic,
+    }));
+    const seen = new Set<string>();
+    setNews([...fromLib, ...liveItems].filter((n) => {
+      const k = n.title.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }));
+  });
 
-  // ── Debounced autosave of the live document + client profile ──
+  useEffect(() => { refreshProjects(); reloadEvidence(); }, []);
+
+  // ── Debounced autosave ──
   useEffect(() => {
     if (!current || !dirty.current) return;
     const t = setTimeout(async () => {
@@ -105,7 +106,7 @@ export function ReportGenerator() {
   }, [doc, inputs, current]);
 
   const markDirty = () => { dirty.current = true; };
-  const handleReady = useCallback((e: Editor) => { editorRef.current = e; }, []);
+  const handleReady = useCallback((e: Editor) => { editorRef.current = e; setEditorInstance(e); }, []);
   const onDocChange = (d: ReportDoc) => { markDirty(); setDoc(d); };
   const setField = (k: keyof ReportInputs, v: string) => { markDirty(); setInputs((s) => ({ ...s, [k]: v })); };
 
@@ -113,7 +114,6 @@ export function ReportGenerator() {
   const resetTransient = () => { setSnapshot(null); setProvider(''); setSelected(new Set()); setShowVersions(false); setErr(null); setCtxNotes(''); setFiles([]); };
   const loadFiles = (projectId: string) => api.files.list({ projectId }).then(setFiles).catch(() => setFiles([]));
 
-  // New report → client-profile step → enter the freshly-created project.
   const onProfileDone = (p: ReportProject) => {
     dirty.current = false;
     setCreating(false);
@@ -132,10 +132,8 @@ export function ReportGenerator() {
     if (!current) return;
     const name = window.prompt('Report name', current.name);
     if (!name) return;
-    try {
-      const saved = await api.projects.update(current.id, { name });
-      setCurrent(saved); refreshProjects();
-    } catch (e) { setErr(String((e as Error).message)); }
+    try { const saved = await api.projects.update(current.id, { name }); setCurrent(saved); refreshProjects(); }
+    catch (e) { setErr(String((e as Error).message)); }
   };
   const deleteProject = async (id: string) => {
     if (!window.confirm('Delete this report? This cannot be undone.')) return;
@@ -150,8 +148,7 @@ export function ReportGenerator() {
     const label = window.prompt('Name this version (optional)', '') ?? '';
     try {
       const saved = await api.projects.update(current.id, { doc, inputs, saveVersion: true, versionLabel: label });
-      dirty.current = false;
-      setCurrent(saved); setSaveState('saved'); refreshProjects();
+      dirty.current = false; setCurrent(saved); setSaveState('saved'); refreshProjects();
     } catch (e) { setErr(String((e as Error).message)); }
   };
   const restoreVersion = (v: ReportVersion) => {
@@ -162,33 +159,62 @@ export function ReportGenerator() {
     setShowVersions(false);
   };
 
-  // ── Evidence + AI draft ──
+  // ── References ──
   const toggle = (id: string) =>
     setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const selectedNews = () => news.filter((n) => selected.has(n.id));
 
-  // ── Files & media: upload (extract text server-side), embed images, remove ──
+  const addRefUrl = async () => {
+    if (!refUrl.trim()) return;
+    setAddingUrl(true); setErr(null);
+    try {
+      const a = await api.savedArticles.fromUrl(refUrl.trim());
+      setRefUrl('');
+      await reloadEvidence();
+      setSelected((s) => new Set(s).add(`lib-${a.id}`));
+    } catch (e) { setErr(String((e as Error).message)); }
+    finally { setAddingUrl(false); }
+  };
+
+  const insertArticle = (n: NewsItem) => {
+    const ed = editorRef.current; if (!ed) return;
+    ed.chain().focus().insertContentAt(ed.state.doc.content.size, { type: 'newsList', attrs: { items: [{ source: n.source, title: n.title, url: n.url }] } }).run();
+  };
+  const insertFile = (f: ClientFile) => {
+    const ed = editorRef.current; if (!ed) return;
+    const at = ed.state.doc.content.size;
+    const href = api.files.downloadUrl(f.id);
+    if (f.mime.startsWith('image/')) ed.chain().focus().insertContentAt(at, { type: 'image', attrs: { src: href } }).run();
+    else ed.chain().focus().insertContentAt(at, { type: 'paragraph', content: [{ type: 'text', text: 'Reference: ' }, { type: 'text', marks: [{ type: 'link', attrs: { href } }], text: f.name }] }).run();
+  };
+  const dragRef = (kind: 'article' | 'file', id: string) => (e: DragEvent) => {
+    e.dataTransfer.setData('application/x-comms-ref', JSON.stringify({ kind, id }));
+    e.dataTransfer.effectAllowed = 'copy';
+  };
+  const onDropReference = (payload: string) => {
+    try {
+      const { kind, id } = JSON.parse(payload) as { kind: string; id: string };
+      if (kind === 'article') { const n = news.find((x) => x.id === id); if (n) insertArticle(n); }
+      else if (kind === 'file') { const f = files.find((x) => x.id === id); if (f) insertFile(f); }
+    } catch { /* ignore */ }
+  };
+
+  // ── Files & media ──
   const onUpload = async (fileList: FileList | null) => {
     if (!fileList || !current) return;
     setUploading(true); setErr(null);
     try {
       for (const file of Array.from(fileList)) {
         const dataUrl = await new Promise<string>((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => res(r.result as string);
-          r.onerror = rej;
-          r.readAsDataURL(file);
+          const r = new FileReader(); r.onload = () => res(r.result as string); r.onerror = rej; r.readAsDataURL(file);
         });
         const base64 = dataUrl.split(',')[1] ?? '';
         const saved = await api.files.upload({ name: file.name, mime: file.type, dataBase64: base64, projectId: current.id });
         setFiles((f) => [saved, ...f]);
         if (file.type.startsWith('image/')) editorRef.current?.chain().focus().setImage({ src: dataUrl }).run();
       }
-    } catch (e) {
-      setErr(String((e as Error).message));
-    } finally {
-      setUploading(false);
-    }
+    } catch (e) { setErr(String((e as Error).message)); }
+    finally { setUploading(false); }
   };
   const removeUpload = async (id: string) => {
     try { await api.files.remove(id); setFiles((f) => f.filter((x) => x.id !== id)); }
@@ -203,10 +229,7 @@ export function ReportGenerator() {
       let dailyBrief: string | null = null;
       if (ctxBrief) { try { dailyBrief = (await api.dailyReview()).review ?? null; } catch { /* ignore */ } }
       const sel = selectedNews();
-      const fileNotes = files
-        .filter((f) => f.extractedText.trim())
-        .map((f) => `From “${f.name}”:\n${f.extractedText.slice(0, 3000)}`)
-        .join('\n\n');
+      const fileNotes = files.filter((f) => f.extractedText.trim()).map((f) => `From “${f.name}”:\n${f.extractedText.slice(0, 3000)}`).join('\n\n');
       const res = await api.assembleReport(inputs, {
         selectedNews: sel.map((n) => ({ source: n.source, title: n.title, summary: n.summary })),
         includeSnapshot: ctxSnapshot,
@@ -214,21 +237,15 @@ export function ReportGenerator() {
         extraNotes: [ctxNotes, fileNotes].filter(Boolean).join('\n\n'),
       });
       setSnapshot(res.snapshot); setProvider(res.provider);
-      if (res.provider === 'error' && res.note) {
-        setErr(`Auto-drafting unavailable (${res.note.slice(0, 150)}). Built an editable skeleton you can fill in.`);
-      }
+      if (res.provider === 'error' && res.note) setErr(`Auto-drafting unavailable (${res.note.slice(0, 150)}). Built an editable skeleton you can fill in.`);
       const built = buildDocFromSections(res.sections, { snapshot: res.snapshot, selectedNews: sel.map(toRef) });
       markDirty();
       if (editorRef.current) editorRef.current.commands.setContent(built, true);
       else setDoc(built);
-    } catch (e) {
-      setErr(String((e as Error).message));
-    } finally {
-      setDrafting(false);
-    }
+    } catch (e) { setErr(String((e as Error).message)); }
+    finally { setDrafting(false); }
   };
 
-  // ── Export ──
   const download = async (fmt: 'pdf' | 'docx') => {
     const liveDoc = (editorRef.current?.getJSON() as ReportDoc | undefined) ?? doc;
     if (!liveDoc.content?.length) return;
@@ -239,203 +256,197 @@ export function ReportGenerator() {
         try { const m = await api.market(); attributions = m.sources.filter((s) => s.attribution).map((s) => s.attribution!); } catch { /* ignore */ }
       }
       const meta = { asOf: snapshot?.asOf, attributions };
-      const exp = await import('../lib/exportReport'); // lazy-load heavy PDF/Word libs
-      const { blob, filename } = fmt === 'pdf'
-        ? await exp.exportReportPdf(inputs, liveDoc, meta)
-        : await exp.exportReportDocx(inputs, liveDoc, meta);
+      const exp = await import('../lib/exportReport');
+      const { blob, filename } = fmt === 'pdf' ? await exp.exportReportPdf(inputs, liveDoc, meta) : await exp.exportReportDocx(inputs, liveDoc, meta);
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = filename; a.click();
+      const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
       URL.revokeObjectURL(url);
-    } catch (e) {
-      setErr(String((e as Error).message));
-    } finally {
-      setExporting(null);
-    }
+    } catch (e) { setErr(String((e as Error).message)); }
+    finally { setExporting(null); }
   };
+
+  // ── Empty state ──
+  if (!current) {
+    return (
+      <>
+        {creating && <ClientProfileForm onDone={onProfileDone} onCancel={() => setCreating(false)} />}
+        <div className="max-w-xl mx-auto card p-8 text-center">
+          <FileText size={30} className="mx-auto mb-3 text-brand-green opacity-70" />
+          <h2 className="text-lg font-semibold">Create a client report</h2>
+          <p className="text-sm text-brand-muted mt-1 mb-4">Start with the client’s profile, then assemble and edit a polished A4 document.</p>
+          <button className="btn-primary mx-auto" onClick={() => setCreating(true)}><FilePlus2 size={16} /> New report</button>
+          {projects.length > 0 && (
+            <div className="mt-6 text-left">
+              <div className="label mb-2">Open an existing report</div>
+              <div className="space-y-0.5 max-h-60 overflow-auto">
+                {projects.map((p) => (
+                  <div key={p.id} className="group flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer hover:bg-brand-surface" onClick={() => openProject(p.id)}>
+                    <FolderOpen size={13} className="text-brand-muted shrink-0" />
+                    <span className="flex-1 truncate">{p.name}</span>
+                    <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up" onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }} title="Delete"><Trash2 size={13} /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {err && <p className="text-sm text-up mt-3">{err}</p>}
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
       {creating && <ClientProfileForm onDone={onProfileDone} onCancel={() => setCreating(false)} />}
-      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-6">
-      {/* ── Left: projects + client profile + evidence ── */}
-      <div className="space-y-5">
-        <div className="card p-3">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-semibold">Reports</h2>
-            <button className="btn-ghost !py-1 !px-2 text-xs" onClick={() => setCreating(true)}><FilePlus2 size={13} /> New</button>
-          </div>
-          <div className="space-y-0.5 max-h-56 overflow-auto">
-            {projects.map((p) => (
-              <div
-                key={p.id}
-                className={'group flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer ' +
-                  (current?.id === p.id ? 'bg-brand-tint' : 'hover:bg-brand-surface')}
-                onClick={() => openProject(p.id)}
-              >
-                <FolderOpen size={13} className="text-brand-muted shrink-0" />
-                <span className="flex-1 truncate">{p.name}</span>
-                <button
-                  className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0"
-                  onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }}
-                  title="Delete report"
-                ><Trash2 size={13} /></button>
-              </div>
-            ))}
-            {!projects.length && <p className="text-xs text-brand-muted px-1 py-2">No saved reports yet — click “New”.</p>}
-          </div>
+
+      {/* Top bar */}
+      <div className="card px-3 py-2 flex flex-wrap items-center gap-2 sticky top-[57px] z-20 mb-3">
+        <div className="relative">
+          <button className="btn-ghost !py-1.5" onClick={() => setShowOpen((v) => !v)}>
+            <FolderOpen size={15} /> <span className="max-w-[180px] truncate">{current.name}</span> <ChevronDown size={13} />
+          </button>
+          {showOpen && (
+            <div className="absolute left-0 mt-1 w-72 card p-1.5 z-30 max-h-80 overflow-auto" onMouseLeave={() => setShowOpen(false)}>
+              <button className="btn-primary w-full !py-1.5 mb-1" onClick={() => { setShowOpen(false); setCreating(true); }}><FilePlus2 size={14} /> New report</button>
+              {projects.map((p) => (
+                <div key={p.id} className={'group flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer ' + (current.id === p.id ? 'bg-brand-tint' : 'hover:bg-brand-surface')} onClick={() => { setShowOpen(false); openProject(p.id); }}>
+                  <FolderOpen size={13} className="text-brand-muted shrink-0" />
+                  <span className="flex-1 truncate">{p.name}</span>
+                  <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up" onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }} title="Delete"><Trash2 size={13} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <button onClick={renameProject} title="Rename report" className="text-brand-muted hover:text-brand-ink"><Pencil size={13} /></button>
+        <span className="text-xs text-brand-muted">{saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : ''}</span>
+
+        <div className="flex-1" />
+
+        <div className="relative">
+          <button className="btn-ghost !py-1.5" onClick={() => setShowVersions((v) => !v)} title="Version history">
+            <History size={15} /> <span className="hidden sm:inline">Versions{current.versions.length ? ` (${current.versions.length})` : ''}</span>
+          </button>
+          {showVersions && (
+            <div className="absolute right-0 mt-1 w-64 card p-1.5 z-30 max-h-64 overflow-auto" onMouseLeave={() => setShowVersions(false)}>
+              {current.versions.length ? [...current.versions].reverse().map((v) => (
+                <div key={v.at} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-brand-surface text-sm">
+                  <div className="flex-1 min-w-0"><div className="truncate">{v.label}</div><div className="text-[11px] text-brand-muted">{new Date(v.at).toLocaleString('en-GB')}</div></div>
+                  <button className="btn-ghost !px-1.5 !py-1" onClick={() => restoreVersion(v)} title="Restore"><RotateCcw size={13} /></button>
+                </div>
+              )) : <p className="text-xs text-brand-muted px-2 py-2">No saved versions yet.</p>}
+            </div>
+          )}
+        </div>
+        <button className="btn-ghost !py-1.5" onClick={saveVersion} title="Snapshot current state"><Save size={15} /> <span className="hidden md:inline">Save version</span></button>
+        <button className="btn-primary !py-1.5" onClick={assemble} disabled={drafting}><Sparkles size={15} /> {drafting ? 'Assembling…' : 'Assemble'}</button>
+        <div className="relative">
+          <button className="btn-ghost !py-1.5" onClick={() => setShowExport((v) => !v)} disabled={!!exporting}>
+            <Download size={15} /> {exporting ? 'Exporting…' : 'Export'} <ChevronDown size={13} />
+          </button>
+          {showExport && (
+            <div className="absolute right-0 mt-1 w-36 card p-1 z-30" onMouseLeave={() => setShowExport(false)}>
+              <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); download('pdf'); }}>Download PDF</button>
+              <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); download('docx'); }}>Download Word</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {err && <p className="text-sm text-up mb-2">{err}</p>}
+
+      {/* 3-zone layout: overview · A4 page · setup */}
+      <div className="grid grid-cols-1 xl:grid-cols-[136px_minmax(0,1fr)_340px] gap-4 items-start">
+        <div className="hidden xl:block sticky top-[110px]"><PageOverview editor={editorInstance} /></div>
+
+        <div className="min-w-0">
+          <CommsEditor docKey={docKey} initialDoc={doc} onChange={onDocChange} onReady={handleReady} onFiles={onUpload} onDropReference={onDropReference} />
+          <p className="text-[11px] text-brand-muted mt-2">
+            Auto-drafted — review and edit before sending. Prices are indicative, not a quotation; general market commentary, not financial advice.
+          </p>
         </div>
 
-        {current && (
-          <>
-            <div>
-              <h3 className="label mb-2">Client profile</h3>
-              <div className="space-y-3">
-                {FIELDS.map((f) => (
-                  <div key={f.key}>
-                    <label className="label block mb-1">{f.label}</label>
-                    <input className="input" placeholder={f.placeholder} value={inputs[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} />
-                  </div>
-                ))}
-                <div>
-                  <label className="label block mb-1">Notes / your projections</label>
-                  <textarea
-                    className="input min-h-[80px]"
-                    placeholder="Anything specific to weave in (budget, risk appetite, renewal goals)…"
-                    value={inputs.agentNotes ?? ''}
-                    onChange={(e) => setField('agentNotes', e.target.value)}
-                  />
+        <div className="space-y-3">
+          <CollapsibleSection title="Client profile" icon={Building2} defaultOpen={false}>
+            <div className="space-y-2.5">
+              {FIELDS.map((f) => (
+                <div key={f.key}>
+                  <label className="label block mb-1">{f.label}</label>
+                  <input className="input !py-1.5 text-sm" placeholder={f.placeholder} value={inputs[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} />
                 </div>
-              </div>
+              ))}
             </div>
+          </CollapsibleSection>
 
-            <div>
-              <h3 className="label mb-2">Context</h3>
-              <div className="space-y-2 text-sm">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" className="accent-brand-green" checked={ctxSnapshot} onChange={(e) => setCtxSnapshot(e.target.checked)} />
-                  Include live market snapshot
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" className="accent-brand-green" checked={ctxBrief} onChange={(e) => setCtxBrief(e.target.checked)} />
-                  Include today’s market brief
-                </label>
-                <div>
-                  <label className="label block mb-1">Extra context</label>
-                  <textarea
-                    className="input min-h-[56px]"
-                    placeholder="Anything else to weave in…"
-                    value={ctxNotes}
-                    onChange={(e) => setCtxNotes(e.target.value)}
-                  />
-                </div>
+          <CollapsibleSection title="References &amp; media" icon={Library} defaultOpen>
+            <div className="space-y-3">
+              <div className="flex gap-1.5">
+                <input className="input !py-1.5 text-sm flex-1" placeholder="Paste an article URL…" value={refUrl} onChange={(e) => setRefUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addRefUrl(); }} />
+                <button className="btn-ghost !py-1.5 !px-2" onClick={addRefUrl} disabled={addingUrl || !refUrl.trim()} title="Fetch & add to library">{addingUrl ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}</button>
               </div>
-            </div>
 
-            <div>
-              <h3 className="label mb-2">Attach evidence (news)</h3>
-              <div className="space-y-1.5 max-h-44 overflow-auto pr-1">
-                {news.map((n) => (
-                  <label key={n.id} className="flex items-start gap-2 text-sm cursor-pointer">
-                    <input type="checkbox" className="mt-1 accent-brand-green" checked={selected.has(n.id)} onChange={() => toggle(n.id)} />
-                    <span><span className="text-brand-greenDark">{n.source}:</span> {n.title}</span>
-                  </label>
-                ))}
-                {!news.length && <p className="text-sm text-brand-muted">No news loaded.</p>}
-              </div>
-            </div>
-
-            <div>
-              <h3 className="label mb-2">Files &amp; media</h3>
-              <label className="btn-ghost w-full cursor-pointer justify-center">
-                {uploading ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />} Upload file or image
-                <input type="file" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ''; }} />
-              </label>
-              {files.length > 0 && (
-                <div className="space-y-1 mt-2 max-h-40 overflow-auto">
-                  {files.map((f) => (
-                    <div key={f.id} className="flex items-center gap-2 text-xs">
-                      <FileText size={12} className="text-brand-muted shrink-0" />
-                      <span className="flex-1 truncate" title={f.name}>{f.name}</span>
-                      {f.extractedText && <span className="text-[10px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0" title="Text extracted for the draft">context</span>}
-                      <button className="text-brand-muted hover:text-up shrink-0" onClick={() => removeUpload(f.id)} title="Remove"><Trash2 size={12} /></button>
+              <div>
+                <div className="label mb-1">Articles — tick to use as context, ＋ to insert</div>
+                <div className="space-y-0.5 max-h-40 overflow-auto pr-1">
+                  {news.map((n) => (
+                    <div key={n.id} draggable onDragStart={dragRef('article', n.id)} className="group flex items-start gap-1.5 text-xs py-0.5 cursor-grab">
+                      <input type="checkbox" className="mt-0.5 accent-brand-green shrink-0" checked={selected.has(n.id)} onChange={() => toggle(n.id)} title="Use as context" />
+                      <span className="flex-1 leading-snug"><span className="text-brand-greenDark">{n.source}:</span> {n.title}</span>
+                      <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-green shrink-0" onClick={() => insertArticle(n)} title="Insert into report"><Plus size={13} /></button>
                     </div>
                   ))}
+                  {!news.length && <p className="text-xs text-brand-muted">No articles yet — paste a URL or save from the News tab.</p>}
                 </div>
-              )}
-              <p className="text-[11px] text-brand-muted mt-1.5">PDFs &amp; Word docs are mined for context; images embed into the page.</p>
-            </div>
+              </div>
 
-            <div>
-              <button className="btn-primary w-full" onClick={assemble} disabled={drafting}>
-                <Sparkles size={16} /> {drafting ? 'Assembling…' : 'Assemble draft'}
-              </button>
-              {provider === 'none' && (
-                <p className="text-xs text-brand-muted mt-1.5">Automatic drafting isn’t set up — a structured skeleton is built that you can fill in and format.</p>
-              )}
-              <p className="text-[11px] text-brand-muted mt-1.5">Assembling replaces the document with a fresh draft from the context above.</p>
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* ── Right: the document editor ── */}
-      <div className="space-y-3">
-        {err && <p className="text-sm text-up">{err}</p>}
-
-        {!current ? (
-          <div className="card p-10 text-center text-brand-muted">
-            <FileText size={28} className="mx-auto mb-2 opacity-50" />
-            Create or open a report to start writing.
-            <div className="mt-3"><button className="btn-primary" onClick={() => setCreating(true)}><FilePlus2 size={16} /> New report</button></div>
-          </div>
-        ) : (
-          <>
-            <div className="flex flex-wrap items-center gap-2">
-              <button className="inline-flex items-center gap-1.5 text-lg font-semibold hover:text-brand-greenDark" onClick={renameProject} title="Rename report">
-                {current.name} <Pencil size={13} className="text-brand-muted" />
-              </button>
-              <span className="text-xs text-brand-muted">
-                {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'All changes saved' : ''}
-              </span>
-              <div className="flex-1" />
-              <div className="relative">
-                <button className="btn-ghost !py-1.5" onClick={() => setShowVersions((v) => !v)} title="Version history">
-                  <History size={15} /> Versions{current.versions.length ? ` (${current.versions.length})` : ''}
-                </button>
-                {showVersions && (
-                  <div className="absolute right-0 mt-1 w-64 card p-1.5 z-20 max-h-64 overflow-auto">
-                    {current.versions.length ? [...current.versions].reverse().map((v) => (
-                      <div key={v.at} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-brand-surface text-sm">
-                        <div className="flex-1 min-w-0">
-                          <div className="truncate">{v.label}</div>
-                          <div className="text-[11px] text-brand-muted">{new Date(v.at).toLocaleString('en-GB')}</div>
-                        </div>
-                        <button className="btn-ghost !px-1.5 !py-1" onClick={() => restoreVersion(v)} title="Restore this version"><RotateCcw size={13} /></button>
+              <div>
+                <div className="label mb-1">Files &amp; media</div>
+                {files.length > 0 && (
+                  <div className="space-y-0.5 max-h-36 overflow-auto pr-1 mb-2">
+                    {files.map((f) => (
+                      <div key={f.id} draggable onDragStart={dragRef('file', f.id)} className="group flex items-center gap-1.5 text-xs py-0.5 cursor-grab">
+                        <FileText size={12} className="text-brand-muted shrink-0" />
+                        <span className="flex-1 truncate" title={f.name}>{f.name}</span>
+                        {f.extractedText && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0">ctx</span>}
+                        <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-green shrink-0" onClick={() => insertFile(f)} title="Insert into report"><Plus size={13} /></button>
+                        <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0" onClick={() => removeUpload(f.id)} title="Remove"><Trash2 size={12} /></button>
                       </div>
-                    )) : <p className="text-xs text-brand-muted px-2 py-2">No saved versions yet.</p>}
+                    ))}
                   </div>
                 )}
+                <label className="btn-ghost w-full cursor-pointer justify-center !py-1.5 text-sm">
+                  {uploading ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />} Upload file or image
+                  <input type="file" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ''; }} />
+                </label>
+                <p className="text-[11px] text-brand-muted mt-1.5">PDFs/Word are mined for context; drag any item onto the page, or drop files straight in.</p>
               </div>
-              <button className="btn-ghost !py-1.5" onClick={saveVersion} title="Snapshot current state"><Save size={15} /> Save version</button>
             </div>
+          </CollapsibleSection>
 
-            <CommsEditor docKey={docKey} initialDoc={doc} onChange={onDocChange} onReady={handleReady} />
-
-            <div className="flex items-center gap-2 pt-1">
-              <button className="btn-primary" onClick={() => download('pdf')} disabled={!!exporting}>
-                <Download size={16} /> {exporting === 'pdf' ? 'Building PDF…' : 'Download PDF'}
-              </button>
-              <button className="btn-ghost" onClick={() => download('docx')} disabled={!!exporting}>
-                <FileText size={16} /> {exporting === 'docx' ? 'Building Word…' : 'Download Word'}
-              </button>
+          <CollapsibleSection title="Your input" icon={PenLine} defaultOpen>
+            <div className="space-y-2.5">
+              <div>
+                <label className="label block mb-1">Notes &amp; projections</label>
+                <textarea className="input min-h-[70px] text-sm" placeholder="Your professional view — budget, risk appetite, renewal goals…" value={inputs.agentNotes ?? ''} onChange={(e) => setField('agentNotes', e.target.value)} />
+              </div>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" className="accent-brand-green" checked={ctxSnapshot} onChange={(e) => setCtxSnapshot(e.target.checked)} /> Include live market snapshot
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" className="accent-brand-green" checked={ctxBrief} onChange={(e) => setCtxBrief(e.target.checked)} /> Include today’s market brief
+              </label>
+              <div>
+                <label className="label block mb-1">Extra context for this draft</label>
+                <textarea className="input min-h-[48px] text-sm" placeholder="Anything else to weave in…" value={ctxNotes} onChange={(e) => setCtxNotes(e.target.value)} />
+              </div>
             </div>
-            <p className="text-[11px] text-brand-muted">
-              Auto-drafted — review and edit before sending. Prices are indicative, not a quotation; general market commentary, not financial advice.
-            </p>
-          </>
-        )}
-      </div>
+          </CollapsibleSection>
+
+          <button className="btn-primary w-full" onClick={assemble} disabled={drafting}>
+            <Sparkles size={16} /> {drafting ? 'Assembling…' : 'Assemble draft'}
+          </button>
+          {provider === 'none' && <p className="text-xs text-brand-muted">Automatic drafting isn’t set up — a structured skeleton is built that you can fill in.</p>}
+        </div>
       </div>
     </>
   );

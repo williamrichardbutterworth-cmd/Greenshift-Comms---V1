@@ -149,8 +149,12 @@ For every "embed" section, "ref" MUST be EXACTLY one of:
 ${refs.map((r) => `- ${r}`).join('\n')}
 
 Guidance:
-- Produce a clear, client-ready structure: executive summary, market context, outlook, and a tailored recommendation — embedding the attached data / charts / news where they support the argument.
-- Put a market-data or chart embed near the market context; put "selectedNews" near the end as supporting evidence.
+- Produce a polished, well-structured client report: executive summary → market context (with a market-data / chart embed) → supporting evidence (the references/news) → outlook → a recommendation tailored to THIS client.
+- Weight the inputs by relevance, distributed across the report — don't dump everything in one place:
+  • the CLIENT DETAILS anchor the executive summary and the recommendation (name the company, their supplier, contract end, consumption where given);
+  • the MARKET snapshot/brief drive the market-context and outlook sections;
+  • the EVIDENCE (attached news + document excerpts in "extra context") support specific claims — cite them where they back a point, not as a list dump;
+  • the AGENT'S NOTES / PROJECTIONS are your steer for the recommendation and tone — reflect them.
 - Use ONLY the figures and evidence provided — never invent numbers. An "embed" merely names data to insert; do not restate those numbers in prose unless they appear in the snapshot above.
 - 6 to 10 sections total. Plain, confident UK English. The agent reviews and edits before sending.`,
   };

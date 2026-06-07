@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
@@ -62,20 +62,39 @@ export function CommsEditor({
   initialDoc,
   onChange,
   onReady,
+  onFiles,
+  onDropReference,
 }: {
   docKey: string;
   initialDoc: ReportDoc;
   onChange: (doc: ReportDoc) => void;
   onReady?: (editor: Editor) => void;
+  onFiles?: (files: FileList) => void;
+  onDropReference?: (payload: string) => void;
 }) {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiAction, setAiAction] = useState<EditAction | null>(null);
   const [aiErr, setAiErr] = useState<string | null>(null);
 
+  // Latest drop callbacks, read inside the (stable) editorProps.handleDrop.
+  const onFilesRef = useRef(onFiles);
+  const onDropRefRef = useRef(onDropReference);
+  onFilesRef.current = onFiles;
+  onDropRefRef.current = onDropReference;
+
   const editor = useEditor({
     extensions: editorExtensions,
     content: initialDoc,
-    editorProps: { attributes: { class: 'report-canvas' } },
+    editorProps: {
+      attributes: { class: 'report-canvas' },
+      handleDrop: (_view, event) => {
+        const dt = (event as DragEvent).dataTransfer;
+        if (dt?.files?.length && onFilesRef.current) { onFilesRef.current(dt.files); return true; }
+        const ref = dt?.getData('application/x-comms-ref');
+        if (ref && onDropRefRef.current) { onDropRefRef.current(ref); return true; }
+        return false;
+      },
+    },
     onUpdate: ({ editor }) => onChange(editor.getJSON() as ReportDoc),
   });
 

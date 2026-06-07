@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getSupabase } from '../lib/supabase';
+import { fetchText } from '../lib/http';
 import { RSS_FEEDS } from '../providers/news/feeds';
 import { classifyTopic } from '../providers/news/classify';
 
@@ -151,6 +152,46 @@ export async function removeArticle(id: string): Promise<boolean> {
   if (next.length === rows.length) return false;
   await filePersist('saved-articles.json', next);
   return true;
+}
+
+// Fetch a URL and scrape its Open Graph / meta tags into a saved article.
+function decodeEntities(s = ''): string {
+  return s
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#0?39;|&#x27;/gi, "'").replace(/&#x2F;/gi, '/')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function metaTag(html: string, ...props: string[]): string | undefined {
+  for (const p of props) {
+    const a = html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${p}["'][^>]+content=["']([^"']*)["']`, 'i'));
+    const b = html.match(new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${p}["']`, 'i'));
+    const v = decodeEntities(a?.[1] ?? b?.[1] ?? '');
+    if (v) return v;
+  }
+  return undefined;
+}
+
+export async function addArticleFromUrl(url: string): Promise<SavedArticle> {
+  const u = (url ?? '').trim();
+  if (!/^https?:\/\//i.test(u)) throw new Error('A valid article URL (https://…) is required.');
+  let html: string;
+  try {
+    html = await fetchText(u, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; Comms/1.0; +greenshift)' } }, 12000);
+  } catch {
+    throw new Error('Could not fetch that URL.');
+  }
+  let host = 'Link';
+  try { host = new URL(u).hostname.replace(/^www\./, ''); } catch { /* keep default */ }
+  const title = metaTag(html, 'og:title', 'twitter:title') ?? decodeEntities(html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] ?? '') ?? '';
+  return saveArticle({
+    title: title || u,
+    summary: metaTag(html, 'og:description', 'twitter:description', 'description') ?? '',
+    source: metaTag(html, 'og:site_name') ?? host,
+    url: u,
+    publishedAt: metaTag(html, 'article:published_time') ?? null,
+  });
 }
 
 // ───────────────────────── Headlines ─────────────────────────

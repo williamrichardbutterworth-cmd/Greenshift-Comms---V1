@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { getNews } from '../providers/news';
 import {
   listFeeds, addFeed, setFeedEnabled, removeFeed,
-  listArticles, saveArticle, removeArticle,
+  listArticles, saveArticle, removeArticle, addArticleFromUrl,
   listHeadlines, addHeadline, removeHeadline,
   type ArticleInput,
 } from '../services/newsStore';
@@ -40,6 +40,10 @@ export async function newsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/news/articles', async () => listArticles());
   app.post('/api/news/articles', async (req, reply) => {
     try { return await saveArticle((req.body ?? {}) as ArticleInput); }
+    catch (e) { return reply.code(400).send({ error: (e as Error).message }); }
+  });
+  app.post('/api/news/articles/from-url', async (req, reply) => {
+    try { return await addArticleFromUrl((req.body as { url?: string })?.url ?? ''); }
     catch (e) { return reply.code(400).send({ error: (e as Error).message }); }
   });
   app.delete('/api/news/articles/:id', async (req, reply) => {

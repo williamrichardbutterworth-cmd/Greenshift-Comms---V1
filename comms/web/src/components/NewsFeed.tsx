@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  ExternalLink, Bookmark, BookmarkCheck, Pin, PinOff, Trash2, Settings2, Plus, Rss,
+  ExternalLink, Bookmark, BookmarkCheck, Pin, PinOff, Trash2, Settings2, Plus, Rss, Link2, Loader2,
 } from 'lucide-react';
 import { api, type NewsItem, type SavedArticle, type Headline, type NewsFeedSource } from '../lib/api';
 
@@ -32,6 +32,8 @@ export function NewsFeed() {
   const [topics, setTopics] = useState<string[]>([]);
   const [manage, setManage] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [urlInput, setUrlInput] = useState('');
+  const [addingUrl, setAddingUrl] = useState(false);
 
   const reloadLib = () => api.savedArticles.list().then(setLibrary).catch(() => {});
   const reloadHl = () => api.headlines.list().then(setHeadlines).catch(() => {});
@@ -51,6 +53,13 @@ export function NewsFeed() {
   const pin = async (i: Displayable) => { try { await api.headlines.add(toInput(i)); reloadHl(); } catch (e) { setErr(String((e as Error).message)); } };
   const unsave = async (id: string) => { try { await api.savedArticles.remove(id); reloadLib(); } catch (e) { setErr(String((e as Error).message)); } };
   const unpin = async (id: string) => { try { await api.headlines.remove(id); reloadHl(); } catch (e) { setErr(String((e as Error).message)); } };
+  const addByUrl = async () => {
+    if (!urlInput.trim()) return;
+    setAddingUrl(true); setErr(null);
+    try { await api.savedArticles.fromUrl(urlInput.trim()); setUrlInput(''); reloadLib(); }
+    catch (e) { setErr(String((e as Error).message)); }
+    finally { setAddingUrl(false); }
+  };
 
   const list: Displayable[] = tab === 'live' ? live.map((n) => ({ ...n, publishedAt: n.publishedAt }))
     : tab === 'headlines' ? headlines
@@ -96,6 +105,22 @@ export function NewsFeed() {
       </div>
 
       {err && <p className="text-sm text-up">{err}</p>}
+
+      {tab === 'library' && (
+        <div className="card p-3 flex flex-wrap gap-2 items-center">
+          <Link2 size={15} className="text-brand-green shrink-0" />
+          <input
+            className="input !py-1.5 flex-1 min-w-[220px] text-sm"
+            placeholder="Paste an article URL to add to your library…"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') addByUrl(); }}
+          />
+          <button className="btn-ghost !py-1.5" onClick={addByUrl} disabled={addingUrl || !urlInput.trim()}>
+            {addingUrl ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} Add
+          </button>
+        </div>
+      )}
 
       <ul className="space-y-2">
         {shown.map((i) => (
