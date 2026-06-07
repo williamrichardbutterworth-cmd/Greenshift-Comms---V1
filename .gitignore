@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+**/node_modules/
+
+# builds
+dist/
+**/dist/
+.vercel/
+*.tsbuildinfo
+
+# env & secrets (keep .env.example tracked)
+.env
+.env.local
+**/.env
+**/.env.local
+
+# runtime data (local ideas file-store fallback)
+comms/server/data/
+
+# local editor / tooling
+.claude/
+
+# misc
+*.log
+.DS_Store
+.cache/
+**/.cache/
+**/.tmp/
