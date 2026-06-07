@@ -17,7 +17,7 @@ export default function App() {
   return (
     <div className="min-h-full">
       <Header tab={tab} onChange={setTab} />
-      <main className="mx-auto max-w-6xl px-5 py-6">
+      <main className={'mx-auto px-5 py-6 ' + (tab === 'report' ? 'max-w-[1800px]' : 'max-w-6xl')}>
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'brief' && <DailyReview />}
         {tab === 'news' && <NewsFeed />}

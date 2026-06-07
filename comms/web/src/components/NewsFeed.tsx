@@ -56,7 +56,7 @@ export function NewsFeed() {
   const addByUrl = async () => {
     if (!urlInput.trim()) return;
     setAddingUrl(true); setErr(null);
-    try { await api.savedArticles.fromUrl(urlInput.trim()); setUrlInput(''); reloadLib(); }
+    try { await api.savedArticles.fromUrl(urlInput.trim()); setUrlInput(''); await reloadLib(); setTab('library'); }
     catch (e) { setErr(String((e as Error).message)); }
     finally { setAddingUrl(false); }
   };
@@ -88,6 +88,22 @@ export function NewsFeed() {
         <button className="btn-ghost !py-1.5" onClick={() => setManage((m) => !m)}><Settings2 size={15} /> Manage feeds</button>
       </div>
 
+      {/* Prominent: add & summarise an article into your library */}
+      <div className="card p-3 bg-gradient-to-br from-brand-tint to-white flex flex-wrap items-center gap-2">
+        <Link2 size={16} className="text-brand-green shrink-0" />
+        <span className="text-sm font-medium shrink-0 hidden sm:block">Add an article</span>
+        <input
+          className="input !py-2 flex-1 min-w-[240px] text-sm bg-white"
+          placeholder="Paste an article URL — we’ll summarise it and save it to your Library…"
+          value={urlInput}
+          onChange={(e) => setUrlInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') addByUrl(); }}
+        />
+        <button className="btn-primary !py-2" onClick={addByUrl} disabled={addingUrl || !urlInput.trim()}>
+          {addingUrl ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} {addingUrl ? 'Summarising…' : 'Add article'}
+        </button>
+      </div>
+
       {manage && <FeedsPanel feeds={feeds} onChange={reloadFeeds} onErr={setErr} />}
 
       {/* Topic filters */}
@@ -105,22 +121,6 @@ export function NewsFeed() {
       </div>
 
       {err && <p className="text-sm text-up">{err}</p>}
-
-      {tab === 'library' && (
-        <div className="card p-3 flex flex-wrap gap-2 items-center">
-          <Link2 size={15} className="text-brand-green shrink-0" />
-          <input
-            className="input !py-1.5 flex-1 min-w-[220px] text-sm"
-            placeholder="Paste an article URL to add to your library…"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') addByUrl(); }}
-          />
-          <button className="btn-ghost !py-1.5" onClick={addByUrl} disabled={addingUrl || !urlInput.trim()}>
-            {addingUrl ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} Add
-          </button>
-        </div>
-      )}
 
       <ul className="space-y-2">
         {shown.map((i) => (

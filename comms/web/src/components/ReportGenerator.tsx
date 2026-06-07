@@ -356,7 +356,7 @@ export function ReportGenerator() {
       {err && <p className="text-sm text-up mb-2">{err}</p>}
 
       {/* 3-zone layout: overview · A4 page · setup */}
-      <div className="grid grid-cols-1 xl:grid-cols-[136px_minmax(0,1fr)_340px] gap-4 items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-[170px_minmax(0,1fr)_380px] gap-6 items-start">
         <div className="hidden xl:block sticky top-[110px]"><PageOverview editor={editorInstance} /></div>
 
         <div className="min-w-0">

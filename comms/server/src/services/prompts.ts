@@ -187,6 +187,23 @@ Return ONLY the rewritten text — no quotes, no preamble, no markdown.`,
   };
 }
 
+// Summarise a fetched article for the agent (2-3 plain sentences).
+export function articleSummaryPrompt(title: string, text: string) {
+  return {
+    system: HOUSE_RULES,
+    prompt: `Summarise this article in 2-3 plain sentences for a UK energy sales agent: the key facts and why they matter for a business buying gas or electricity. No preamble, no markdown.
+
+Title: ${title}
+
+Article:
+"""
+${text.slice(0, 6000)}
+"""
+
+Return only the summary.`,
+  };
+}
+
 // Mine a pasted call transcript for report-relevant client details.
 export function transcriptExtractPrompt(transcript: string) {
   return {

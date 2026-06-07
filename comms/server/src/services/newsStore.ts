@@ -4,8 +4,11 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getSupabase } from '../lib/supabase';
 import { fetchText } from '../lib/http';
+import { getAI } from '../providers/ai';
+import { aiConfigured } from '../config';
 import { RSS_FEEDS } from '../providers/news/feeds';
 import { classifyTopic } from '../providers/news/classify';
+import { articleSummaryPrompt } from './prompts';
 
 // News curation (§8A): user-curatable feeds, a saved-article library and the
 // persisted "Headlines" set. Same dual Supabase/file-fallback design as the
@@ -173,6 +176,18 @@ function metaTag(html: string, ...props: string[]): string | undefined {
   return undefined;
 }
 
+// Strip an HTML page down to its readable article text (best-effort).
+function extractReadableText(html: string): string {
+  const cleaned = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
+  const main = cleaned.match(/<article[\s\S]*?<\/article>/i)?.[0]
+    ?? cleaned.match(/<main[\s\S]*?<\/main>/i)?.[0]
+    ?? cleaned;
+  return decodeEntities(main.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
 export async function addArticleFromUrl(url: string): Promise<SavedArticle> {
   const u = (url ?? '').trim();
   if (!/^https?:\/\//i.test(u)) throw new Error('A valid article URL (https://…) is required.');
@@ -185,9 +200,24 @@ export async function addArticleFromUrl(url: string): Promise<SavedArticle> {
   let host = 'Link';
   try { host = new URL(u).hostname.replace(/^www\./, ''); } catch { /* keep default */ }
   const title = metaTag(html, 'og:title', 'twitter:title') ?? decodeEntities(html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] ?? '') ?? '';
+  const ogDesc = metaTag(html, 'og:description', 'twitter:description', 'description') ?? '';
+
+  // Prefer an AI summary of the article body; fall back to the meta description / first text.
+  let summary = ogDesc;
+  const body = extractReadableText(html);
+  if (aiConfigured() && body.length > 200) {
+    try {
+      const ai = getAI();
+      const { system, prompt } = articleSummaryPrompt(title || u, body);
+      const s = (await ai.generateText({ system, prompt, maxTokens: 220 })).trim();
+      if (s) summary = s;
+    } catch { /* keep the meta description */ }
+  }
+  if (!summary) summary = body.slice(0, 280);
+
   return saveArticle({
     title: title || u,
-    summary: metaTag(html, 'og:description', 'twitter:description', 'description') ?? '',
+    summary,
     source: metaTag(html, 'og:site_name') ?? host,
     url: u,
     publishedAt: metaTag(html, 'article:published_time') ?? null,

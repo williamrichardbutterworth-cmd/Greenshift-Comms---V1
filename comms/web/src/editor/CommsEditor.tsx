@@ -15,6 +15,7 @@ import { PriceChart, defaultChart } from './nodes/PriceChart';
 import { NewsList } from './nodes/NewsList';
 import { CustomChart, defaultCustomChart } from './nodes/CustomChart';
 
+const A4_PAGE_H = 1122; // A4 @96dpi (matches .report-sheet in index.css)
 const heading2 = (text: string) => ({ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text }] });
 
 const AI_ACTIONS: { action: EditAction; label: string }[] = [
@@ -75,6 +76,8 @@ export function CommsEditor({
   const [aiOpen, setAiOpen] = useState(false);
   const [aiAction, setAiAction] = useState<EditAction | null>(null);
   const [aiErr, setAiErr] = useState<string | null>(null);
+  const [pages, setPages] = useState(1);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   // Latest drop callbacks, read inside the (stable) editorProps.handleDrop.
   const onFilesRef = useRef(onFiles);
@@ -109,6 +112,22 @@ export function CommsEditor({
     if (editor) editor.commands.setContent(initialDoc, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docKey]);
+
+  // Count A4 pages from the rendered sheet height (drives the page-break markers).
+  useEffect(() => {
+    if (!editor) return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const sync = () => {
+      const sheet = wrapRef.current?.querySelector('.report-sheet') as HTMLElement | null;
+      const h = Math.max(sheet?.scrollHeight ?? 0, sheet?.offsetHeight ?? 0, A4_PAGE_H);
+      setPages(Math.max(1, Math.ceil(h / A4_PAGE_H)));
+    };
+    const deb = () => { if (t) clearTimeout(t); t = setTimeout(sync, 250); };
+    sync();
+    editor.on('update', deb);
+    window.addEventListener('resize', deb);
+    return () => { editor.off('update', deb); window.removeEventListener('resize', deb); if (t) clearTimeout(t); };
+  }, [editor]);
 
   if (!editor) return null;
 
@@ -204,8 +223,17 @@ export function CommsEditor({
       {aiErr && <div className="px-3 py-1.5 text-xs text-up bg-brand-tint border-b border-brand-line">{aiErr}</div>}
 
       {/* The A4 document canvas */}
-      <div className="report-deck max-h-[74vh] overflow-auto">
-        <EditorContent editor={editor} className="report-sheet" />
+      <div className="report-deck max-h-[80vh] overflow-auto">
+        <div className="report-page-wrap" ref={wrapRef}>
+          <EditorContent editor={editor} className="report-sheet" />
+          <div className="report-pagebreaks" aria-hidden>
+            {Array.from({ length: Math.max(0, pages - 1) }).map((_, i) => (
+              <div key={i} className="report-pagebreak" style={{ top: (i + 1) * A4_PAGE_H }}>
+                <span className="report-pagebreak-label">Page {i + 2}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-t border-brand-line text-[11px] text-brand-muted">
