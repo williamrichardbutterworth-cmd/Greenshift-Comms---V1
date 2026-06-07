@@ -6,6 +6,6 @@
     "api/**/*.ts": { "memory": 1024, "maxDuration": 30 }
   },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
