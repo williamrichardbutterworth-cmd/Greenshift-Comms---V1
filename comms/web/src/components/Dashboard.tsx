@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Activity } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Activity, RefreshCw } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { api, type MarketSnapshot, type Metric } from '../lib/api';
 import { MetricCard } from './MetricCard';
+import { PriceExplorer } from './PriceExplorer';
 
 // Bucket the live metrics into readable sections (order matters — storage before gas).
 const GROUPS: { key: string; title: string; match: (label: string) => boolean }[] = [
@@ -46,15 +47,26 @@ const FUEL_COLORS = ['#40A800', '#318300', '#73C13B', '#9BD46A', '#2B2A2E', '#6B
 export function Dashboard() {
   const [data, setData] = useState<MarketSnapshot | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    api.market().then(setData).catch((e) => setErr(String(e.message)));
+  const load = useCallback(() => {
+    setRefreshing(true);
+    return api.market()
+      .then((d) => { setData(d); setErr(null); })
+      .catch((e) => setErr(String(e.message)))
+      .finally(() => setRefreshing(false));
   }, []);
 
-  if (err) return <p className="text-sm text-up">Couldn’t load market data: {err}</p>;
+  useEffect(() => { load(); }, [load]);
+
+  if (err && !data) return <p className="text-sm text-up">Couldn’t load market data: {err}</p>;
   if (!data) return <p className="text-sm text-brand-muted">Loading market data…</p>;
 
   const groups = groupMetrics(data.metrics);
+  const liveCount = data.metrics.filter((m) => m.sourceName !== 'Sample data').length;
+  const mix = [...data.generationMix].sort((a, b) => b.pct - a.pct);
+  const topFuel = mix[0];
+  const maxPct = topFuel?.pct || 1;
 
   return (
     <div className="space-y-6">
@@ -67,15 +79,31 @@ export function Dashboard() {
                 <Activity size={17} />
               </span>
               <h2 className="text-lg font-semibold">UK energy market</h2>
+              <span className="text-[11px] text-brand-greenDark bg-brand-green/10 px-2 py-0.5 rounded-full font-medium">
+                {liveCount} of {data.metrics.length} metrics live
+              </span>
             </div>
             <p className="text-sm text-brand-muted mt-1.5">{marketLine(data.metrics)}</p>
           </div>
-          <div className="text-right shrink-0">
-            <div className="label">As of</div>
-            <div className="text-sm font-medium">{new Date(data.asOf).toLocaleString('en-GB')}</div>
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="text-right">
+              <div className="label">As of</div>
+              <div className="text-sm font-medium">{new Date(data.asOf).toLocaleString('en-GB')}</div>
+            </div>
+            <button
+              className="btn-ghost !px-2.5 !py-2"
+              onClick={load}
+              disabled={refreshing}
+              title="Refresh market data"
+            >
+              <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+            </button>
           </div>
         </div>
       </section>
+
+      {/* Detailed price history */}
+      <PriceExplorer />
 
       {/* Grouped metrics */}
       {groups.map((g) => (
@@ -90,31 +118,46 @@ export function Dashboard() {
       {/* Generation mix donut */}
       <section className="card p-5">
         <div className="label mb-3">GB generation mix (now)</div>
-        <div className="grid sm:grid-cols-[180px_1fr] gap-5 items-center">
-          <div className="h-44">
+        <div className="grid sm:grid-cols-[200px_1fr] gap-6 items-center">
+          <div className="h-48 relative">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={data.generationMix}
+                  data={mix}
                   dataKey="pct"
                   nameKey="fuel"
-                  innerRadius={48}
-                  outerRadius={72}
+                  innerRadius={54}
+                  outerRadius={80}
                   paddingAngle={1.5}
                   stroke="none"
+                  isAnimationActive={false}
                 >
-                  {data.generationMix.map((g, i) => <Cell key={g.fuel} fill={FUEL_COLORS[i % FUEL_COLORS.length]} />)}
+                  {mix.map((g, i) => <Cell key={g.fuel} fill={FUEL_COLORS[i % FUEL_COLORS.length]} />)}
                 </Pie>
                 <Tooltip formatter={(v: number, n: string) => [`${v}%`, n]} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
               </PieChart>
             </ResponsiveContainer>
+            {topFuel && (
+              <div className="absolute inset-0 grid place-items-center pointer-events-none">
+                <div className="text-center">
+                  <div className="font-mono text-xl font-semibold leading-none">{topFuel.pct}%</div>
+                  <div className="text-[11px] text-brand-muted mt-0.5">{topFuel.fuel}</div>
+                </div>
+              </div>
+            )}
           </div>
-          <div className="grid grid-cols-2 gap-x-5 gap-y-1.5">
-            {data.generationMix.map((g, i) => (
-              <div key={g.fuel} className="flex items-center gap-2 text-sm">
+          <div className="space-y-1.5">
+            {mix.map((g, i) => (
+              <div key={g.fuel} className="flex items-center gap-2.5 text-sm">
                 <span className="h-2.5 w-2.5 rounded-sm shrink-0" style={{ background: FUEL_COLORS[i % FUEL_COLORS.length] }} />
-                <span className="flex-1 text-brand-ink truncate">{g.fuel}</span>
-                <span className="font-mono text-brand-muted">{g.pct}%</span>
+                <span className="w-28 text-brand-ink truncate shrink-0">{g.fuel}</span>
+                <div className="flex-1 h-1.5 rounded-full bg-brand-line/60 overflow-hidden">
+                  <div
+                    className="h-full rounded-full"
+                    style={{ width: `${(g.pct / maxPct) * 100}%`, background: FUEL_COLORS[i % FUEL_COLORS.length] }}
+                  />
+                </div>
+                <span className="font-mono text-brand-muted w-10 text-right shrink-0">{g.pct}%</span>
               </div>
             ))}
           </div>

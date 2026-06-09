@@ -2,17 +2,18 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import type { Editor } from '@tiptap/react';
 import {
   Sparkles, Download, FileText, Trash2, FilePlus2, History, Save, FolderOpen, Pencil, RotateCcw,
-  Paperclip, Loader2, ChevronDown, Building2, Library, PenLine, Link2, Plus,
+  Paperclip, Loader2, ChevronDown, Building2, Library, PenLine, Link2, Plus, LayoutGrid, Search, Bookmark,
 } from 'lucide-react';
 import {
   api, EMPTY_DOC,
-  type NewsItem, type ReportInputs, type MarketSnapshot, type ReportDoc,
+  type NewsItem, type ReportInputs, type MarketSnapshot, type ReportDoc, type ContextItem,
   type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle,
 } from '../lib/api';
 import { CommsEditor } from '../editor/CommsEditor';
 import { PageOverview } from '../editor/PageOverview';
 import { ClientProfileForm } from './ClientProfileForm';
 import { CollapsibleSection } from './CollapsibleSection';
+import { ReportHome } from './ReportHome';
 import { buildDocFromSections } from '../lib/buildDocFromSections';
 
 const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] = [
@@ -23,6 +24,15 @@ const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] 
   { key: 'currentSupplier', label: 'Current supplier', placeholder: 'British Gas' },
   { key: 'contractEnd', label: 'Contract end', placeholder: 'Sep 2026' },
   { key: 'consumption', label: 'Annual consumption', placeholder: '450,000 kWh' },
+];
+
+// Staged status shown while the draft is assembled (the API call is one shot;
+// these keep the wait legible).
+const DRAFT_STAGES = [
+  'Gathering live market data…',
+  'Weighing the client profile and your references…',
+  'Composing the narrative sections…',
+  'Building your document…',
 ];
 
 const toRef = (n: NewsItem): NewsRef => ({ source: n.source, title: n.title, url: n.url });
@@ -51,6 +61,7 @@ export function ReportGenerator() {
   const [ctxNotes, setCtxNotes] = useState('');
 
   const [drafting, setDrafting] = useState(false);
+  const [draftStage, setDraftStage] = useState<string | null>(null);
   const [exporting, setExporting] = useState<'pdf' | 'docx' | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [showVersions, setShowVersions] = useState(false);
@@ -62,9 +73,10 @@ export function ReportGenerator() {
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [refUrl, setRefUrl] = useState('');
+  const [refQuery, setRefQuery] = useState('');
   const [addingUrl, setAddingUrl] = useState(false);
 
-  const refreshProjects = () => api.projects.list().then(setProjects).catch(() => {});
+  const refreshProjects = useCallback(() => api.projects.list().then(setProjects).catch(() => {}), []);
 
   // References = saved-article library + the live feed (deduped by title).
   const reloadEvidence = () => Promise.all([
@@ -84,15 +96,37 @@ export function ReportGenerator() {
     }));
   });
 
-  useEffect(() => { refreshProjects(); reloadEvidence(); }, []);
+  useEffect(() => { refreshProjects(); reloadEvidence(); }, [refreshProjects]);
 
-  // ── Debounced autosave ──
+  // ── Context tray ⇄ report_projects.context ──
+  const buildContext = useCallback((): ContextItem[] => {
+    const items: ContextItem[] = [];
+    if (ctxSnapshot) items.push({ id: 'market-snapshot', kind: 'marketSnapshot', label: 'Live market snapshot' });
+    if (ctxBrief) items.push({ id: 'daily-brief', kind: 'dailyBrief', label: 'Today’s market brief' });
+    if (ctxNotes.trim()) items.push({ id: 'extra-notes', kind: 'note', label: 'Extra context', note: ctxNotes });
+    for (const n of news.filter((x) => selected.has(x.id))) {
+      items.push({ id: `news-sel:${n.id}`, kind: 'news', label: n.title, news: [toRef(n)] });
+    }
+    return items;
+  }, [ctxSnapshot, ctxBrief, ctxNotes, selected, news]);
+
+  // Empty/missing context = legacy project or untouched tray → sensible defaults.
+  const restoreContext = (items: ContextItem[] | undefined) => {
+    const ctx = items ?? [];
+    if (!ctx.length) { setCtxSnapshot(true); setCtxBrief(false); setCtxNotes(''); setSelected(new Set()); return; }
+    setCtxSnapshot(ctx.some((c) => c.kind === 'marketSnapshot'));
+    setCtxBrief(ctx.some((c) => c.kind === 'dailyBrief'));
+    setCtxNotes(ctx.find((c) => c.kind === 'note' && c.id === 'extra-notes')?.note ?? '');
+    setSelected(new Set(ctx.filter((c) => c.id.startsWith('news-sel:')).map((c) => c.id.slice('news-sel:'.length))));
+  };
+
+  // ── Debounced autosave (doc + inputs + context tray) ──
   useEffect(() => {
     if (!current || !dirty.current) return;
     const t = setTimeout(async () => {
       setSaveState('saving');
       try {
-        const saved = await api.projects.update(current.id, { doc, inputs });
+        const saved = await api.projects.update(current.id, { doc, inputs, context: buildContext() });
         dirty.current = false;
         setSaveState('saved');
         setCurrent((c) => (c && c.id === saved.id ? saved : c));
@@ -103,7 +137,7 @@ export function ReportGenerator() {
       }
     }, 1200);
     return () => clearTimeout(t);
-  }, [doc, inputs, current]);
+  }, [doc, inputs, current, buildContext, refreshProjects]);
 
   const markDirty = () => { dirty.current = true; };
   const handleReady = useCallback((e: Editor) => { editorRef.current = e; setEditorInstance(e); }, []);
@@ -111,22 +145,32 @@ export function ReportGenerator() {
   const setField = (k: keyof ReportInputs, v: string) => { markDirty(); setInputs((s) => ({ ...s, [k]: v })); };
 
   // ── Project lifecycle ──
-  const resetTransient = () => { setSnapshot(null); setProvider(''); setSelected(new Set()); setShowVersions(false); setErr(null); setCtxNotes(''); setFiles([]); };
+  const resetTransient = () => { setSnapshot(null); setProvider(''); setShowVersions(false); setErr(null); setFiles([]); setRefQuery(''); };
   const loadFiles = (projectId: string) => api.files.list({ projectId }).then(setFiles).catch(() => setFiles([]));
 
   const onProfileDone = (p: ReportProject) => {
     dirty.current = false;
     setCreating(false);
     setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
-    resetTransient(); loadFiles(p.id); refreshProjects();
+    resetTransient(); restoreContext(p.context); loadFiles(p.id); refreshProjects();
   };
   const openProject = async (id: string) => {
     try {
       const p = await api.projects.get(id);
       dirty.current = false;
       setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
-      resetTransient(); loadFiles(p.id);
+      resetTransient(); restoreContext(p.context); loadFiles(p.id);
     } catch (e) { setErr(String((e as Error).message)); }
+  };
+  // Back to the overview — flush any pending autosave first.
+  const goHome = async () => {
+    if (current && dirty.current) {
+      try { await api.projects.update(current.id, { doc, inputs, context: buildContext() }); dirty.current = false; }
+      catch { /* the overview still opens; the project keeps its last good save */ }
+    }
+    setCurrent(null); setDoc(EMPTY_DOC); setInputs({}); setDocKey('none');
+    setSaveState('idle');
+    refreshProjects();
   };
   const renameProject = async () => {
     if (!current) return;
@@ -147,7 +191,7 @@ export function ReportGenerator() {
     if (!current) return;
     const label = window.prompt('Name this version (optional)', '') ?? '';
     try {
-      const saved = await api.projects.update(current.id, { doc, inputs, saveVersion: true, versionLabel: label });
+      const saved = await api.projects.update(current.id, { doc, inputs, context: buildContext(), saveVersion: true, versionLabel: label });
       dirty.current = false; setCurrent(saved); setSaveState('saved'); refreshProjects();
     } catch (e) { setErr(String((e as Error).message)); }
   };
@@ -160,8 +204,10 @@ export function ReportGenerator() {
   };
 
   // ── References ──
-  const toggle = (id: string) =>
+  const toggle = (id: string) => {
+    markDirty();
     setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
   const selectedNews = () => news.filter((n) => selected.has(n.id));
 
   const addRefUrl = async () => {
@@ -171,31 +217,34 @@ export function ReportGenerator() {
       const a = await api.savedArticles.fromUrl(refUrl.trim());
       setRefUrl('');
       await reloadEvidence();
+      markDirty();
       setSelected((s) => new Set(s).add(`lib-${a.id}`));
     } catch (e) { setErr(String((e as Error).message)); }
     finally { setAddingUrl(false); }
   };
 
-  const insertArticle = (n: NewsItem) => {
+  const insertArticle = (n: NewsItem, at?: number) => {
     const ed = editorRef.current; if (!ed) return;
-    ed.chain().focus().insertContentAt(ed.state.doc.content.size, { type: 'newsList', attrs: { items: [{ source: n.source, title: n.title, url: n.url }] } }).run();
+    const pos = at ?? ed.state.doc.content.size;
+    ed.chain().focus().insertContentAt(pos, { type: 'newsList', attrs: { items: [{ source: n.source, title: n.title, url: n.url }] } }).run();
   };
-  const insertFile = (f: ClientFile) => {
+  const insertFile = (f: ClientFile, at?: number) => {
     const ed = editorRef.current; if (!ed) return;
-    const at = ed.state.doc.content.size;
+    const pos = at ?? ed.state.doc.content.size;
     const href = api.files.downloadUrl(f.id);
-    if (f.mime.startsWith('image/')) ed.chain().focus().insertContentAt(at, { type: 'image', attrs: { src: href } }).run();
-    else ed.chain().focus().insertContentAt(at, { type: 'paragraph', content: [{ type: 'text', text: 'Reference: ' }, { type: 'text', marks: [{ type: 'link', attrs: { href } }], text: f.name }] }).run();
+    if (f.mime.startsWith('image/')) ed.chain().focus().insertContentAt(pos, { type: 'image', attrs: { src: href } }).run();
+    else ed.chain().focus().insertContentAt(pos, { type: 'paragraph', content: [{ type: 'text', text: 'Reference: ' }, { type: 'text', marks: [{ type: 'link', attrs: { href } }], text: f.name }] }).run();
   };
   const dragRef = (kind: 'article' | 'file', id: string) => (e: DragEvent) => {
     e.dataTransfer.setData('application/x-comms-ref', JSON.stringify({ kind, id }));
     e.dataTransfer.effectAllowed = 'copy';
   };
-  const onDropReference = (payload: string) => {
+  // pos comes from the editor's drop handler (posAtCoords) → insert at the cursor.
+  const onDropReference = (payload: string, pos?: number) => {
     try {
       const { kind, id } = JSON.parse(payload) as { kind: string; id: string };
-      if (kind === 'article') { const n = news.find((x) => x.id === id); if (n) insertArticle(n); }
-      else if (kind === 'file') { const f = files.find((x) => x.id === id); if (f) insertFile(f); }
+      if (kind === 'article') { const n = news.find((x) => x.id === id); if (n) insertArticle(n, pos); }
+      else if (kind === 'file') { const f = files.find((x) => x.id === id); if (f) insertFile(f, pos); }
     } catch { /* ignore */ }
   };
 
@@ -225,6 +274,12 @@ export function ReportGenerator() {
     if (!current) return;
     if (docHasContent(doc) && !window.confirm('Assembling a draft will replace the current document. Continue?')) return;
     setDrafting(true); setErr(null);
+    let stageIdx = 0;
+    setDraftStage(DRAFT_STAGES[0]);
+    const stageTimer = setInterval(() => {
+      stageIdx = Math.min(stageIdx + 1, DRAFT_STAGES.length - 1);
+      setDraftStage(DRAFT_STAGES[stageIdx]);
+    }, 4500);
     try {
       let dailyBrief: string | null = null;
       if (ctxBrief) { try { dailyBrief = (await api.dailyReview()).review ?? null; } catch { /* ignore */ } }
@@ -243,7 +298,7 @@ export function ReportGenerator() {
       if (editorRef.current) editorRef.current.commands.setContent(built, true);
       else setDoc(built);
     } catch (e) { setErr(String((e as Error).message)); }
-    finally { setDrafting(false); }
+    finally { clearInterval(stageTimer); setDraftStage(null); setDrafting(false); }
   };
 
   const download = async (fmt: 'pdf' | 'docx') => {
@@ -265,35 +320,24 @@ export function ReportGenerator() {
     finally { setExporting(null); }
   };
 
-  // ── Empty state ──
+  // ── Overview (no report open) ──
   if (!current) {
     return (
       <>
         {creating && <ClientProfileForm onDone={onProfileDone} onCancel={() => setCreating(false)} />}
-        <div className="max-w-xl mx-auto card p-8 text-center">
-          <FileText size={30} className="mx-auto mb-3 text-brand-green opacity-70" />
-          <h2 className="text-lg font-semibold">Create a client report</h2>
-          <p className="text-sm text-brand-muted mt-1 mb-4">Start with the client’s profile, then assemble and edit a polished A4 document.</p>
-          <button className="btn-primary mx-auto" onClick={() => setCreating(true)}><FilePlus2 size={16} /> New report</button>
-          {projects.length > 0 && (
-            <div className="mt-6 text-left">
-              <div className="label mb-2">Open an existing report</div>
-              <div className="space-y-0.5 max-h-60 overflow-auto">
-                {projects.map((p) => (
-                  <div key={p.id} className="group flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer hover:bg-brand-surface" onClick={() => openProject(p.id)}>
-                    <FolderOpen size={13} className="text-brand-muted shrink-0" />
-                    <span className="flex-1 truncate">{p.name}</span>
-                    <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up" onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }} title="Delete"><Trash2 size={13} /></button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {err && <p className="text-sm text-up mt-3">{err}</p>}
-        </div>
+        <ReportHome
+          projects={projects}
+          onOpen={openProject}
+          onNew={() => setCreating(true)}
+          onRefresh={refreshProjects}
+        />
+        {err && <p className="text-sm text-up mt-3 text-center">{err}</p>}
       </>
     );
   }
+
+  const refQ = refQuery.trim().toLowerCase();
+  const shownRefs = refQ ? news.filter((n) => n.title.toLowerCase().includes(refQ) || n.source.toLowerCase().includes(refQ)) : news;
 
   return (
     <>
@@ -301,6 +345,9 @@ export function ReportGenerator() {
 
       {/* Top bar */}
       <div className="card px-3 py-2 flex flex-wrap items-center gap-2 sticky top-[57px] z-20 mb-3">
+        <button className="btn-ghost !py-1.5 !px-2" onClick={goHome} title="All reports & clients">
+          <LayoutGrid size={15} />
+        </button>
         <div className="relative">
           <button className="btn-ghost !py-1.5" onClick={() => setShowOpen((v) => !v)}>
             <FolderOpen size={15} /> <span className="max-w-[180px] truncate">{current.name}</span> <ChevronDown size={13} />
@@ -359,8 +406,17 @@ export function ReportGenerator() {
       <div className="grid grid-cols-1 xl:grid-cols-[170px_minmax(0,1fr)_380px] gap-6 items-start">
         <div className="hidden xl:block sticky top-[110px]"><PageOverview editor={editorInstance} /></div>
 
-        <div className="min-w-0">
+        <div className="min-w-0 relative">
           <CommsEditor docKey={docKey} initialDoc={doc} onChange={onDocChange} onReady={handleReady} onFiles={onUpload} onDropReference={onDropReference} />
+          {drafting && (
+            <div className="absolute inset-0 z-10 grid place-items-center bg-white/70 backdrop-blur-[1.5px] rounded-xl">
+              <div className="card px-7 py-5 text-center shadow-md max-w-xs">
+                <Loader2 className="animate-spin mx-auto mb-2.5 text-brand-green" size={22} />
+                <div className="text-sm font-medium min-h-[20px]">{draftStage}</div>
+                <div className="text-[11px] text-brand-muted mt-1.5">Assembling your draft — this can take up to half a minute.</div>
+              </div>
+            </div>
+          )}
           <p className="text-[11px] text-brand-muted mt-2">
             Auto-drafted — review and edit before sending. Prices are indicative, not a quotation; general market commentary, not financial advice.
           </p>
@@ -378,7 +434,12 @@ export function ReportGenerator() {
             </div>
           </CollapsibleSection>
 
-          <CollapsibleSection title="References &amp; media" icon={Library} defaultOpen>
+          <CollapsibleSection
+            title="References &amp; media"
+            icon={Library}
+            defaultOpen
+            right={<span className="text-[11px] text-brand-muted font-normal">{news.length} articles · {files.length} files</span>}
+          >
             <div className="space-y-3">
               <div className="flex gap-1.5">
                 <input className="input !py-1.5 text-sm flex-1" placeholder="Paste an article URL…" value={refUrl} onChange={(e) => setRefUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addRefUrl(); }} />
@@ -386,16 +447,25 @@ export function ReportGenerator() {
               </div>
 
               <div>
-                <div className="label mb-1">Articles — tick to use as context, ＋ to insert</div>
+                <div className="flex items-center gap-2 mb-1">
+                  <div className="label flex-1">Articles — tick to use as context, ＋ to insert</div>
+                </div>
+                {news.length > 6 && (
+                  <div className="relative mb-1.5">
+                    <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+                    <input className="input !py-1 !pl-7 text-xs" placeholder="Filter articles…" value={refQuery} onChange={(e) => setRefQuery(e.target.value)} />
+                  </div>
+                )}
                 <div className="space-y-0.5 max-h-40 overflow-auto pr-1">
-                  {news.map((n) => (
+                  {shownRefs.map((n) => (
                     <div key={n.id} draggable onDragStart={dragRef('article', n.id)} className="group flex items-start gap-1.5 text-xs py-0.5 cursor-grab">
                       <input type="checkbox" className="mt-0.5 accent-brand-green shrink-0" checked={selected.has(n.id)} onChange={() => toggle(n.id)} title="Use as context" />
+                      {n.id.startsWith('lib-') && <Bookmark size={11} className="mt-0.5 text-brand-greenDark shrink-0" />}
                       <span className="flex-1 leading-snug"><span className="text-brand-greenDark">{n.source}:</span> {n.title}</span>
                       <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-green shrink-0" onClick={() => insertArticle(n)} title="Insert into report"><Plus size={13} /></button>
                     </div>
                   ))}
-                  {!news.length && <p className="text-xs text-brand-muted">No articles yet — paste a URL or save from the News tab.</p>}
+                  {!shownRefs.length && <p className="text-xs text-brand-muted">{refQ ? 'No articles match.' : 'No articles yet — paste a URL or save from the News tab.'}</p>}
                 </div>
               </div>
 
@@ -418,7 +488,7 @@ export function ReportGenerator() {
                   {uploading ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />} Upload file or image
                   <input type="file" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ''; }} />
                 </label>
-                <p className="text-[11px] text-brand-muted mt-1.5">PDFs/Word are mined for context; drag any item onto the page, or drop files straight in.</p>
+                <p className="text-[11px] text-brand-muted mt-1.5">PDFs/Word are mined for context; drag any item onto the page to insert it at the drop point, or drop files straight in.</p>
               </div>
             </div>
           </CollapsibleSection>
@@ -430,15 +500,16 @@ export function ReportGenerator() {
                 <textarea className="input min-h-[70px] text-sm" placeholder="Your professional view — budget, risk appetite, renewal goals…" value={inputs.agentNotes ?? ''} onChange={(e) => setField('agentNotes', e.target.value)} />
               </div>
               <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input type="checkbox" className="accent-brand-green" checked={ctxSnapshot} onChange={(e) => setCtxSnapshot(e.target.checked)} /> Include live market snapshot
+                <input type="checkbox" className="accent-brand-green" checked={ctxSnapshot} onChange={(e) => { markDirty(); setCtxSnapshot(e.target.checked); }} /> Include live market snapshot
               </label>
               <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input type="checkbox" className="accent-brand-green" checked={ctxBrief} onChange={(e) => setCtxBrief(e.target.checked)} /> Include today’s market brief
+                <input type="checkbox" className="accent-brand-green" checked={ctxBrief} onChange={(e) => { markDirty(); setCtxBrief(e.target.checked); }} /> Include today’s market brief
               </label>
               <div>
                 <label className="label block mb-1">Extra context for this draft</label>
-                <textarea className="input min-h-[48px] text-sm" placeholder="Anything else to weave in…" value={ctxNotes} onChange={(e) => setCtxNotes(e.target.value)} />
+                <textarea className="input min-h-[48px] text-sm" placeholder="Anything else to weave in…" value={ctxNotes} onChange={(e) => { markDirty(); setCtxNotes(e.target.value); }} />
               </div>
+              <p className="text-[11px] text-brand-muted">These choices are saved with the report, so the tray is set up the same way next time you open it.</p>
             </div>
           </CollapsibleSection>
 

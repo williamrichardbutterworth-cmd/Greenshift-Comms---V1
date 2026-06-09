@@ -104,14 +104,14 @@ function CustomChartView({ node, updateAttributes, deleteNode, selected }: NodeV
                   <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                   <YAxis tick={{ fontSize: 10 }} width={40} domain={['auto', 'auto']} />
                   <Tooltip contentStyle={{ fontSize: 12 }} />
-                  <Line type="monotone" dataKey="value" stroke="#40A800" strokeWidth={2} dot={{ r: 2 }} />
+                  <Line type="monotone" dataKey="value" stroke="#40A800" strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} />
                 </LineChart>
               ) : (
                 <BarChart data={chartData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
                   <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                   <YAxis tick={{ fontSize: 10 }} width={40} domain={['auto', 'auto']} />
                   <Tooltip contentStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="value" fill="#40A800" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="value" fill="#40A800" radius={[3, 3, 0, 0]} isAnimationActive={false} />
                 </BarChart>
               )}
             </ResponsiveContainer>

@@ -71,7 +71,7 @@ export function CommsEditor({
   onChange: (doc: ReportDoc) => void;
   onReady?: (editor: Editor) => void;
   onFiles?: (files: FileList) => void;
-  onDropReference?: (payload: string) => void;
+  onDropReference?: (payload: string, pos?: number) => void;
 }) {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiAction, setAiAction] = useState<EditAction | null>(null);
@@ -90,11 +90,17 @@ export function CommsEditor({
     content: initialDoc,
     editorProps: {
       attributes: { class: 'report-canvas' },
-      handleDrop: (_view, event) => {
-        const dt = (event as DragEvent).dataTransfer;
+      handleDrop: (view, event) => {
+        const drag = event as DragEvent;
+        const dt = drag.dataTransfer;
         if (dt?.files?.length && onFilesRef.current) { onFilesRef.current(dt.files); return true; }
         const ref = dt?.getData('application/x-comms-ref');
-        if (ref && onDropRefRef.current) { onDropRefRef.current(ref); return true; }
+        if (ref && onDropRefRef.current) {
+          // Insert where the item was dropped, not at the document end.
+          const pos = view.posAtCoords({ left: drag.clientX, top: drag.clientY })?.pos;
+          onDropRefRef.current(ref, pos);
+          return true;
+        }
         return false;
       },
     },

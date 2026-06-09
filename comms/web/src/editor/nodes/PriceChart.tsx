@@ -73,7 +73,7 @@ function PriceChartView({ node, updateAttributes, deleteNode, selected }: NodeVi
                 <XAxis dataKey="t" tick={{ fontSize: 10 }} minTickGap={48} tickFormatter={(t) => String(t).slice(2, 7)} />
                 <YAxis tick={{ fontSize: 10 }} width={40} domain={['auto', 'auto']} />
                 <Tooltip contentStyle={{ fontSize: 12 }} />
-                <Line type="monotone" dataKey="v" stroke="#40A800" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="v" stroke="#40A800" strokeWidth={2} dot={false} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
