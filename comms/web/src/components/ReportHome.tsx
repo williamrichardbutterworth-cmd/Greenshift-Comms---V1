@@ -3,6 +3,7 @@ import {
   FileText, FilePlus2, Trash2, Pencil, Search, Building2, Clock, X, ArrowRight,
 } from 'lucide-react';
 import { api, type ReportProjectSummary, type ClientProfile } from '../lib/api';
+import { stageLabel } from '../lib/crm';
 
 function ago(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -18,12 +19,13 @@ function ago(iso: string): string {
 // The Report tab's home screen: manage saved reports and client profiles in one
 // overview, and start new work from either.
 export function ReportHome({
-  projects, onOpen, onNew, onNewForClient, onRefresh,
+  projects, onOpen, onNew, onNewForClient, onOpenClient, onRefresh,
 }: {
   projects: ReportProjectSummary[];
   onOpen: (id: string) => void;
   onNew: () => void;
   onNewForClient: (profileId: string) => void;
+  onOpenClient: (id: string) => void;
   onRefresh: () => void;
 }) {
   const [profiles, setProfiles] = useState<ClientProfile[]>([]);
@@ -136,36 +138,39 @@ export function ReportHome({
         </div>
       )}
 
-      {/* Client profiles */}
+      {/* Clients (CRM) */}
       <section>
         <div className="flex items-center gap-2 mb-2">
-          <div className="label">Client profiles</div>
-          <span className="text-[11px] text-brand-muted">— reusable details that pre-fill new reports</span>
+          <div className="label">Clients</div>
+          <span className="text-[11px] text-brand-muted">— open a client to manage their pipeline stage, activity and documents</span>
         </div>
         {shownProfiles.length ? (
           <div className="card divide-y divide-brand-line">
             {shownProfiles.map((p) => (
-              <div key={p.id} className="group flex items-center gap-3 px-4 py-2.5">
+              <div key={p.id} className="group flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-brand-surface transition" onClick={() => onOpenClient(p.id)}>
                 <span className="grid place-items-center h-8 w-8 rounded-lg bg-brand-tint text-brand-greenDark shrink-0">
                   <Building2 size={15} />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium truncate">{p.name}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium truncate">{p.name}</span>
+                    <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-brand-tint text-brand-greenDark shrink-0">{stageLabel(p.stage)}</span>
+                  </div>
                   <div className="text-[11px] text-brand-muted truncate">
-                    {[p.inputs.currentSupplier && `Supplier: ${p.inputs.currentSupplier}`, p.inputs.contractEnd && `Contract end: ${p.inputs.contractEnd}`, p.inputs.sites]
+                    {[p.inputs.currentSupplier && `Supplier: ${p.inputs.currentSupplier}`, p.inputs.contractEnd && `Contract end: ${p.inputs.contractEnd}`, p.activities?.length ? `${p.activities.length} activities` : null]
                       .filter(Boolean).join(' · ') || 'No details yet'}
                   </div>
                 </div>
                 <button
                   className="btn-ghost !py-1 !px-2.5 text-xs"
-                  onClick={() => onNewForClient(p.id)}
+                  onClick={(e) => { e.stopPropagation(); onNewForClient(p.id); }}
                   title="Create a new document for this client"
                 >
                   <ArrowRight size={13} /> New document
                 </button>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                  <button className="p-1 text-brand-muted hover:text-brand-ink" onClick={() => renameProfile(p)} title="Rename profile"><Pencil size={13} /></button>
-                  <button className="p-1 text-brand-muted hover:text-up" onClick={() => deleteProfile(p.id)} title="Delete profile"><Trash2 size={13} /></button>
+                  <button className="p-1 text-brand-muted hover:text-brand-ink" onClick={(e) => { e.stopPropagation(); renameProfile(p); }} title="Rename client"><Pencil size={13} /></button>
+                  <button className="p-1 text-brand-muted hover:text-up" onClick={(e) => { e.stopPropagation(); deleteProfile(p.id); }} title="Delete client"><Trash2 size={13} /></button>
                 </div>
               </div>
             ))}

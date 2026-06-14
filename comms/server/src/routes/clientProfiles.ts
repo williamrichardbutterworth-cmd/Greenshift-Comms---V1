@@ -1,10 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import {
   listClientProfiles, getClientProfile, createClientProfile, updateClientProfile, removeClientProfile,
-  type NewClientProfile,
+  appendActivity, type NewClientProfile, type ClientActivity,
 } from '../services/clientProfilesStore';
 
-// Reusable client profiles (§8B Batch 2).
+// Client records — the CRM store (profile + stage + tracker + activity timeline).
 export async function clientProfileRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/client-profiles', async () => listClientProfiles());
 
@@ -23,7 +23,14 @@ export async function clientProfileRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.patch('/api/client-profiles/:id', async (req, reply) => {
-    const p = await updateClientProfile((req.params as { id: string }).id, (req.body ?? {}) as NewClientProfile);
+    const p = await updateClientProfile((req.params as { id: string }).id, (req.body ?? {}) as NewClientProfile & { activities?: ClientActivity[] });
+    if (!p) return reply.code(404).send({ error: 'Client profile not found.' });
+    return p;
+  });
+
+  // Append a single activity to the client's timeline (server assigns id + time).
+  app.post('/api/client-profiles/:id/activities', async (req, reply) => {
+    const p = await appendActivity((req.params as { id: string }).id, (req.body ?? {}) as Partial<ClientActivity>);
     if (!p) return reply.code(404).send({ error: 'Client profile not found.' });
     return p;
   });

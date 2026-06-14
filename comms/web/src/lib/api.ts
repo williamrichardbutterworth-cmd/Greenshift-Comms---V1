@@ -85,6 +85,8 @@ export interface ReportInputs {
   /** Which document template this project was created from (persisted on the project). */
   documentTypeId?: string;
   documentChannel?: 'document' | 'email';
+  /** The client this document belongs to (links a project back to its CRM record). */
+  clientProfileId?: string;
 }
 
 // ── Document templates (user-definable) ──
@@ -210,9 +212,25 @@ export interface AssembleResult { sections: SectionSpec[]; snapshot: MarketSnaps
 export type EditAction = 'concise' | 'expand' | 'addData' | 'rewrite' | 'regenerate' | 'analyseChart';
 export interface EditResult { text: string; provider: string; error?: string; }
 
-// ── Reusable client profiles ──
-export interface ClientProfile { id: string; name: string; inputs: ReportInputs; createdAt: string; }
-export interface NewClientProfile { name?: string; inputs?: ReportInputs; }
+// ── Client records (CRM) ──
+export type ClientStage = 'new' | 'profiling' | 'loa' | 'data' | 'tender' | 'proposal' | 'won' | 'lost';
+export type ActivityType =
+  | 'note' | 'transcript' | 'email-sent' | 'email-received' | 'document' | 'file' | 'stage' | 'milestone' | 'recommendation';
+export interface ClientActivity {
+  id: string; at: string; type: ActivityType; title: string; detail?: string; meta?: Record<string, unknown>;
+}
+export interface ClientProfile {
+  id: string; name: string; inputs: ReportInputs; createdAt: string;
+  stage: ClientStage;
+  tracker: Record<string, string | null>;
+  activities: ClientActivity[];
+  updatedAt: string;
+}
+export interface NewClientProfile {
+  name?: string; inputs?: ReportInputs; stage?: ClientStage;
+  tracker?: Record<string, string | null>; activities?: ClientActivity[];
+}
+export interface NewActivity { type: ActivityType; title: string; detail?: string; meta?: Record<string, unknown>; }
 
 // ── Uploaded files / media ──
 export interface ClientFile {
@@ -225,6 +243,17 @@ export interface NewFileUpload {
 
 // ── Call-transcript extraction ──
 export interface TranscriptExtract { profile: Partial<ReportInputs>; points: string[]; provider: string; error?: string; }
+
+// ── CRM: source analysis + next-step recommendation ──
+export type SourceKind = 'transcript' | 'bill' | 'email' | 'auto';
+export interface SourceAnalysis {
+  kind: string; profile: Partial<ReportInputs>; summary: string; points: string[];
+  suggestedMilestones: string[]; provider: string; error?: string;
+}
+export interface NextStep { action: string; rationale: string; templateId: string; provider: string; error?: string; }
+export interface RecommendClientPayload {
+  inputs: ReportInputs; stage: string; doneMilestones: string[]; recentActivity: string[];
+}
 
 // ── Admin ideas (feedback board) ──
 export type IdeaStatus = 'new' | 'considering' | 'planned' | 'done';
@@ -323,13 +352,15 @@ export const api = {
     remove: (id: string) => j<{ ok: boolean }>(`/api/report/templates/${id}`, { method: 'DELETE' }),
   },
 
-  // Reusable client profiles.
+  // Client records (CRM).
   profiles: {
     list: () => j<ClientProfile[]>('/api/client-profiles'),
     get: (id: string) => j<ClientProfile>(`/api/client-profiles/${id}`),
     create: (input: NewClientProfile) => j<ClientProfile>('/api/client-profiles', postJson(input)),
     update: (id: string, input: NewClientProfile) =>
       j<ClientProfile>(`/api/client-profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
+    addActivity: (id: string, activity: NewActivity) =>
+      j<ClientProfile>(`/api/client-profiles/${id}/activities`, postJson(activity)),
     remove: (id: string) => j<{ ok: boolean }>(`/api/client-profiles/${id}`, { method: 'DELETE' }),
   },
 
@@ -346,6 +377,11 @@ export const api = {
 
   // Mine a pasted call transcript for client details.
   extractTranscript: (transcript: string) => j<TranscriptExtract>('/api/report/transcript-extract', postJson({ transcript })),
+  // CRM intake + next-step recommendation.
+  analyzeSource: (text: string, kind: SourceKind = 'auto', inputs?: ReportInputs) =>
+    j<SourceAnalysis>('/api/report/analyze', postJson({ text, kind, inputs })),
+  recommendNextStep: (client: RecommendClientPayload) =>
+    j<NextStep>('/api/report/recommend', postJson({ client })),
   ideas: () => j<Idea[]>('/api/ideas'),
   ideasMeta: () => j<IdeasMeta>('/api/ideas/meta'),
   addIdea: (input: NewIdea) => j<Idea>('/api/ideas', postJson(input)),

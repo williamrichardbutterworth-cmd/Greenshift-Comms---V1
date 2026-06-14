@@ -277,11 +277,75 @@ ${transcript.slice(0, 12000)}
 Return ONLY JSON in exactly this shape:
 {
   "profile": {
-    "companyName": "", "contact": "", "sites": "", "currentSupplier": "", "contractEnd": "", "consumption": ""
+    "companyName": "", "clientName": "", "contact": "", "sites": "", "currentSupplier": "", "contractEnd": "", "consumption": ""
   },
   "points": ["a concise, report-relevant point actually raised on the call — a goal, pain point, renewal driver or objection"]
 }
 Leave any profile field as an empty string if it was not clearly stated. Provide 0-8 points. Plain UK English.`,
+  };
+}
+
+// ── CRM: analyse a pasted/uploaded source (transcript, energy bill, email) ──
+export type SourceKind = 'transcript' | 'bill' | 'email' | 'auto';
+
+const SOURCE_HINT: Record<SourceKind, string> = {
+  transcript: 'This is a call transcript between a Green Shift agent and a UK business.',
+  bill: 'This is a UK business energy bill or statement. Look for supplier, MPAN/MPRN, annual or period consumption (kWh), unit rate (p/kWh), standing charge, and contract/renewal end date.',
+  email: 'This is an email to/from the client.',
+  auto: 'This could be a call transcript, an energy bill, or an email — infer which.',
+};
+
+export function sourceAnalysisPrompt(text: string, kind: SourceKind, currentInputs?: ReportInputs) {
+  return {
+    system: HOUSE_RULES,
+    prompt: `${SOURCE_HINT[kind]} Extract ONLY details clearly stated; never invent or infer beyond the text. ${currentInputs && Object.keys(currentInputs).length ? `\n\nWhat we already know (only fill fields that are missing or clearly updated):\n${JSON.stringify(currentInputs, null, 2)}` : ''}
+
+Source:
+"""
+${text.slice(0, 14000)}
+"""
+
+Return ONLY JSON in exactly this shape:
+{
+  "kind": "transcript|bill|email",
+  "profile": { "companyName": "", "clientName": "", "contact": "", "sites": "", "currentSupplier": "", "contractEnd": "", "consumption": "" },
+  "summary": "one concise sentence describing what this source is and the single most important takeaway, suitable for a CRM timeline entry",
+  "points": ["a concise, useful point actually stated — a goal, figure, pain point, renewal driver or objection"],
+  "suggestedMilestones": ["zero or more of: billReceived, loaSent, loaReturned, quotesGathered, proposalSent, signed — ONLY if the source clearly evidences that milestone (e.g. an attached/described bill -> billReceived; a signed LOA -> loaReturned)"]
+}
+Leave any profile field as an empty string if not clearly stated. For 'consumption' include units (e.g. "450,000 kWh/yr"). Provide 0-8 points. Plain UK English.`,
+  };
+}
+
+// ── CRM: recommend the next best action for a client ──
+export interface RecommendClient {
+  inputs: ReportInputs;
+  stage: string;
+  doneMilestones: string[];
+  recentActivity: string[];
+}
+export interface RecommendTemplate { id: string; name: string; channel: string; description: string }
+
+export function nextStepPrompt(client: RecommendClient, templates: RecommendTemplate[]) {
+  return {
+    system: `You are an experienced UK B2B energy sales manager coaching an agent through a deal in their CRM. Be decisive, practical and brief. UK English. Base your advice ONLY on the client state provided — never invent facts.`,
+    prompt: `Client state:
+- Company: ${client.inputs.companyName ?? 'unknown'}${client.inputs.currentSupplier ? `, supplier ${client.inputs.currentSupplier}` : ''}${client.inputs.contractEnd ? `, contract end ${client.inputs.contractEnd}` : ''}${client.inputs.consumption ? `, consumption ${client.inputs.consumption}` : ''}
+- Pipeline stage: ${client.stage}
+- Completed milestones: ${client.doneMilestones.length ? client.doneMilestones.join(', ') : 'none yet'}
+- Recent activity (newest first):
+${client.recentActivity.length ? client.recentActivity.map((a) => `  • ${a}`).join('\n') : '  (none)'}
+
+Document templates the agent can generate now:
+${templates.map((t) => `- id "${t.id}" — ${t.name} (${t.channel}): ${t.description}`).join('\n')}
+
+Decide the single best NEXT ACTION to move this deal forward. Return ONLY JSON in exactly this shape:
+{
+  "action": "a short imperative next step, e.g. 'Send the Letter of Authority cover email'",
+  "rationale": "one or two sentences: why this is the right next move given where the deal is",
+  "templateId": "the id of the template to generate for this action, or empty string if no template fits"
+}
+Choose templateId ONLY from the ids listed above. Keep it concrete and tied to the client's actual stage and missing milestones.`,
   };
 }
 

@@ -58,6 +58,14 @@ create table if not exists public.client_profiles (
   created_at  timestamptz not null default now()
 );
 
+-- CRM fields (added incrementally — safe to re-run): pipeline stage, milestone
+-- tracker, activity timeline, and a last-touched timestamp.
+alter table public.client_profiles add column if not exists stage      text        not null default 'new';
+alter table public.client_profiles add column if not exists tracker    jsonb       not null default '{}'::jsonb;
+alter table public.client_profiles add column if not exists activities jsonb       not null default '[]'::jsonb;
+alter table public.client_profiles add column if not exists updated_at timestamptz not null default now();
+create index if not exists client_profiles_updated_idx on public.client_profiles (updated_at desc);
+
 alter table public.client_profiles enable row level security;
 
 

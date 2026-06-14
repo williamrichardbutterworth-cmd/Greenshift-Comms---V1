@@ -7,7 +7,7 @@ import {
 import {
   api, EMPTY_DOC,
   type NewsItem, type ReportInputs, type MarketSnapshot, type ReportDoc, type ContextItem,
-  type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle, type DocNode,
+  type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle, type DocNode, type NewActivity,
 } from '../lib/api';
 import { CommsEditor } from '../editor/CommsEditor';
 import { PageOverview } from '../editor/PageOverview';
@@ -16,6 +16,7 @@ import { DocumentTypePicker } from './DocumentTypePicker';
 import type { DocumentTemplate } from '../lib/api';
 import { CollapsibleSection } from './CollapsibleSection';
 import { ReportHome } from './ReportHome';
+import { ClientHub } from './ClientHub';
 import { buildDocFromSections } from '../lib/buildDocFromSections';
 
 const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] = [
@@ -77,6 +78,8 @@ export function ReportGenerator() {
   const [picking, setPicking] = useState(false);
   const [pendingTemplate, setPendingTemplate] = useState<DocumentTemplate | null>(null);
   const [pickProfileId, setPickProfileId] = useState<string | undefined>(undefined);
+  // CRM: the open client hub (overview → client hub → studio).
+  const [activeClientId, setActiveClientId] = useState<string | null>(null);
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [refUrl, setRefUrl] = useState('');
@@ -159,6 +162,16 @@ export function ReportGenerator() {
   const startNew = (profileId?: string) => { setPickProfileId(profileId); setPendingTemplate(null); setPicking(true); };
   const onTemplatePicked = (t: DocumentTemplate) => { setPendingTemplate(t); setPicking(false); setCreating(true); };
   const cancelCreate = () => { setCreating(false); setPendingTemplate(null); setPickProfileId(undefined); };
+  // From the client hub: create a document for this client, optionally jumping
+  // straight to a recommended template (skipping the picker).
+  const startDocumentForClient = async (client: { id: string }, templateId?: string) => {
+    setPickProfileId(client.id);
+    if (templateId) {
+      try { const t = await api.templates.get(templateId); setPendingTemplate(t); setPicking(false); setCreating(true); return; }
+      catch { /* fall back to the picker */ }
+    }
+    setPendingTemplate(null); setPicking(true);
+  };
 
   const onProfileDone = (p: ReportProject) => {
     dirty.current = false;
@@ -337,8 +350,15 @@ export function ReportGenerator() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
       URL.revokeObjectURL(url);
+      logClientActivity({ type: 'document', title: `Exported ${fmt.toUpperCase()}${current ? `: ${current.name}` : ''}` });
     } catch (e) { setErr(String((e as Error).message)); }
     finally { setExporting(null); }
+  };
+
+  // Log an activity back to the client this document belongs to (no-op if none).
+  const logClientActivity = (a: NewActivity) => {
+    const cid = inputs.clientProfileId;
+    if (cid) api.profiles.addActivity(cid, a).catch(() => { /* timeline logging is best-effort */ });
   };
 
   // ── Email channel: plain-text body from the live doc ──
@@ -365,7 +385,7 @@ export function ReportGenerator() {
   };
   const copyEmail = async () => {
     const text = emailText();
-    const ok = () => { setCopied(true); setErr(null); setTimeout(() => setCopied(false), 1600); };
+    const ok = () => { setCopied(true); setErr(null); setTimeout(() => setCopied(false), 1600); logClientActivity({ type: 'email-sent', title: `Email copied to send${current ? `: ${current.name}` : ''}` }); };
     try { await navigator.clipboard.writeText(text); ok(); return; } catch { /* fall back to legacy copy below */ }
     try {
       const ta = document.createElement('textarea');
@@ -384,19 +404,29 @@ export function ReportGenerator() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Overview (no report open) ──
+  // ── Overview / client hub (no document open) ──
   if (!current) {
     return (
       <>
         {picking && <DocumentTypePicker onPick={onTemplatePicked} onCancel={() => setPicking(false)} />}
         {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} onDone={onProfileDone} onCancel={cancelCreate} />}
-        <ReportHome
-          projects={projects}
-          onOpen={openProject}
-          onNew={() => startNew()}
-          onNewForClient={(profileId) => startNew(profileId)}
-          onRefresh={refreshProjects}
-        />
+        {activeClientId ? (
+          <ClientHub
+            clientId={activeClientId}
+            onBack={() => setActiveClientId(null)}
+            onStartDocument={startDocumentForClient}
+            onOpenProject={openProject}
+          />
+        ) : (
+          <ReportHome
+            projects={projects}
+            onOpen={openProject}
+            onNew={() => startNew()}
+            onNewForClient={(profileId) => startNew(profileId)}
+            onOpenClient={(id) => setActiveClientId(id)}
+            onRefresh={refreshProjects}
+          />
+        )}
         {err && <p className="text-sm text-up mt-3 text-center">{err}</p>}
       </>
     );

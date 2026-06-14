@@ -77,14 +77,24 @@ export function ClientProfileForm({ onDone, onCancel, template, initialProfileId
     setBusy(true);
     setErr(null);
     try {
-      // Save (or update) the reusable profile (client fields only), then create
-      // the linked project stamped with the chosen document template.
+      // Save (or create) the client record, then create the linked document
+      // stamped with the template + client, and log it on the client's timeline.
+      let clientId = selectedId;
       if (selectedId) await api.profiles.update(selectedId, { inputs }).catch(() => {});
-      else if (inputs.companyName?.trim()) await api.profiles.create({ inputs }).catch(() => {});
-      const docInputs: ReportInputs = template ? { ...inputs, documentTypeId: template.id, documentChannel: template.channel } : inputs;
+      else if (inputs.companyName?.trim()) { const created = await api.profiles.create({ inputs }).catch(() => null); if (created) clientId = created.id; }
+      const docInputs: ReportInputs = {
+        ...inputs,
+        ...(template ? { documentTypeId: template.id, documentChannel: template.channel } : {}),
+        ...(clientId ? { clientProfileId: clientId } : {}),
+      };
       const label = template ? template.name : 'report';
       const name = inputs.companyName?.trim() ? `${inputs.companyName.trim()} — ${label}` : (template ? template.name : 'Untitled report');
       const project = await api.projects.create({ name, inputs: docInputs, doc: EMPTY_DOC });
+      if (clientId) {
+        await api.profiles.addActivity(clientId, {
+          type: 'document', title: `Created ${template?.name ?? 'document'}`, meta: { projectId: project.id, templateId: template?.id },
+        }).catch(() => {});
+      }
       onDone(project);
     } catch (e) {
       setErr(String((e as Error).message));
