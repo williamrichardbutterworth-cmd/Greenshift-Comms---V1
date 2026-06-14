@@ -11,7 +11,7 @@ export const config = {
   // AI
   aiProvider: (process.env.AI_PROVIDER ?? 'claude').toLowerCase(),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
-  claudeModel: process.env.CLAUDE_MODEL ?? 'claude-fable-5',
+  claudeModel: process.env.CLAUDE_MODEL ?? 'claude-opus-4-8',
   openaiApiKey: process.env.OPENAI_API_KEY ?? '',
   openaiModel: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
 

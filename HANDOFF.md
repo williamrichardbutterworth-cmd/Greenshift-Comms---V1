@@ -45,7 +45,7 @@ Compliance is wired throughout and must stay: indicative-pricing + not-financial
 
 ### Secrets & credentials (unchanged — exact locations, never in the repo)
 - **Local:** `comms/server/.env` (gitignored) holds `ANTHROPIC_API_KEY`, `AI_PROVIDER`, `CLAUDE_MODEL`, `USE_LIVE_MARKET_DATA=true`, `USE_LIVE_NEWS=true` (+ optional provider keys). **Supabase env is deliberately NOT set locally** → all stores use the JSON-file fallback in `server/data/`. To exercise Supabase locally, copy `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` from the Vercel dashboard into that file.
-- **Production:** all keys are Vercel → Settings → Environment Variables: `ANTHROPIC_API_KEY`, `AI_PROVIDER=claude`, `CLAUDE_MODEL=claude-fable-5` (update from the old `claude-opus-4-8` pin — or delete it, the code default is now Fable 5), `USE_LIVE_MARKET_DATA=true`, `USE_LIVE_NEWS=true`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (the `sb_secret_…` service-role key — server-only, bypasses RLS).
+- **Production:** all keys are Vercel → Settings → Environment Variables: `ANTHROPIC_API_KEY`, `AI_PROVIDER=claude`, `CLAUDE_MODEL=claude-opus-4-8` (matches the code default), `USE_LIVE_MARKET_DATA=true`, `USE_LIVE_NEWS=true`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (the `sb_secret_…` service-role key — server-only, bypasses RLS).
 - **GitHub pushes:** the macOS keychain holds a credential for the WRONG account (`willbutters05` — pushes 403). Pushes use a **fine-grained PAT for `williamrichardbutterworth-cmd`** (Contents: read/write on this repo), supplied by the user in-chat per session and used one-off — never stored:
   ```bash
   HDR="Authorization: Basic $(printf '%s' 'williamrichardbutterworth-cmd:<PAT>' | base64 | tr -d '\n')"
@@ -169,7 +169,7 @@ cd comms        && npx tsc --noEmit -p tsconfig.json   # the serverless function
 1. **No Puppeteer on Vercel** — PDF/Word are client-side (`exportReport.ts`). jsPDF images need compression (`'FAST'`/`'MEDIUM'`).
 2. **Bundle the backend** — esbuild `--bundle --format=esm --packages=external` → `server/dist/app.js`; the function imports that (plain TS imports don't resolve in the serverless ESM runtime).
 3. **Route nested `/api/*`** — the explicit `"/api/(.*)"` rewrite is required; the SPA rewrite must exclude `/api`.
-4. **Fable 5 / Opus 4.7+ reject `temperature`/`top_p`/`top_k`, and Fable 5 also rejects an explicit `thinking:{type:'disabled'}`** — `claude.ts` deliberately omits all of them. Don't add them back.
+4. **Opus 4.7+ reject `temperature`/`top_p`/`top_k`** (sending them returns a 400); **Fable 5 additionally rejects an explicit `thinking:{type:'disabled'}`**. `claude.ts` omits all of them — safe across every supported model, so switching `CLAUDE_MODEL` between Opus and Fable needs no code change. Don't add them back.
 5. **TipTap is pinned to v2 (`^2.27.2`)** — installing an extension without a version pulls v3 and breaks peer deps (happened with `extension-image`; install `@^2.27.2`). Import ProseMirror only via `@tiptap/pm/*` (duplicate-instance crash otherwise).
 6. **`pdf-parse` is broken under ESM** (its debug self-test crashes on import; its exports map blocks the subpath workaround) — we use **`unpdf`**. Keep it.
 7. **jsPDF hangs (synchronously, uninterruptibly) on degenerate images** — the exporter skips images < 8px. Don't remove that guard.
