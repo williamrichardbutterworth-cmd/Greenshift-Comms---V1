@@ -67,6 +67,7 @@ export function CommsEditor({
   onReady,
   onFiles,
   onDropReference,
+  surface = 'a4',
 }: {
   docKey: string;
   initialDoc: ReportDoc;
@@ -74,6 +75,7 @@ export function CommsEditor({
   onReady?: (editor: Editor) => void;
   onFiles?: (files: FileList) => void;
   onDropReference?: (payload: string, pos?: number) => void;
+  surface?: 'a4' | 'email';
 }) {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiAction, setAiAction] = useState<EditAction | null>(null);
@@ -232,22 +234,31 @@ export function CommsEditor({
 
       {aiErr && <div className="px-3 py-1.5 text-xs text-up bg-brand-tint border-b border-brand-line">{aiErr}</div>}
 
-      {/* The A4 document canvas */}
-      <div className="report-deck max-h-[80vh] overflow-auto">
-        <div className="report-page-wrap" ref={wrapRef}>
-          <EditorContent editor={editor} className="report-sheet" />
-          <div className="report-pagebreaks" aria-hidden>
-            {Array.from({ length: Math.max(0, pages - 1) }).map((_, i) => (
-              <div key={i} className="report-pagebreak" style={{ top: (i + 1) * A4_PAGE_H }}>
-                <span className="report-pagebreak-label">Page {i + 2}</span>
-              </div>
-            ))}
+      {surface === 'email' ? (
+        /* Email canvas — a plain message sheet, no A4 page chrome */
+        <div className="email-deck max-h-[80vh] overflow-auto">
+          <div className="email-page-wrap">
+            <EditorContent editor={editor} className="email-sheet" />
           </div>
         </div>
-      </div>
+      ) : (
+        /* The A4 document canvas */
+        <div className="report-deck max-h-[80vh] overflow-auto">
+          <div className="report-page-wrap" ref={wrapRef}>
+            <EditorContent editor={editor} className="report-sheet" />
+            <div className="report-pagebreaks" aria-hidden>
+              {Array.from({ length: Math.max(0, pages - 1) }).map((_, i) => (
+                <div key={i} className="report-pagebreak" style={{ top: (i + 1) * A4_PAGE_H }}>
+                  <span className="report-pagebreak-label">Page {i + 2}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center gap-1.5 px-3 py-1.5 border-t border-brand-line text-[11px] text-brand-muted">
-        <Plus size={12} /> A4 page · type to write, format with the toolbar, drag the handle on any block to reorder
+        <Plus size={12} /> {surface === 'email' ? 'Email · type to write, format with the toolbar, then Copy email or Export' : 'A4 page · type to write, format with the toolbar, drag the handle on any block to reorder'}
       </div>
     </div>
   );

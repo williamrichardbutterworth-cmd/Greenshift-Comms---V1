@@ -1,5 +1,6 @@
 import type { MarketSnapshot } from '../providers/marketData/types';
 import type { NewsItem } from '../providers/news/types';
+import type { DocumentTemplate } from './templatesStore';
 
 // All AI prompts live here so the "voice" of the product is in one editable
 // place (content/code separation). Keep them tightly scoped and insist on
@@ -110,25 +111,26 @@ export interface AssembleContext {
   dailyBrief?: string | null;
   extraNotes?: string;
   customCharts?: AssembleCustomChart[];
+  /** Which document template to build to (resolved server-side). */
+  templateId?: string;
 }
 
 function assembleNewsForPrompt(news: AssembleNews[]): string {
   return news.map((n, i) => `${i + 1}. [${n.source}] ${n.title}${n.summary ? ' — ' + n.summary : ''}`).join('\n');
 }
 
-export function reportAssemblePrompt(inputs: ReportInputs, snapshot: MarketSnapshot, ctx: AssembleContext) {
+function refList(ctx: AssembleContext): string[] {
   const refs: string[] = [];
   if (ctx.includeSnapshot) refs.push('"marketSnapshot" — the live market metrics table');
   refs.push('"chart:brent:12m" — a price-trend chart (series may be brent|gas|power; range may be 3m|6m|12m)');
   refs.push('"generationMap" — a UK map of regional grid carbon intensity + live interconnector flows (use at most once, where grid/sustainability context helps)');
   if (ctx.selectedNews?.length) refs.push('"selectedNews" — the attached news headlines, as a bulleted list');
   (ctx.customCharts ?? []).forEach((c) => refs.push(`"customChart:${c.id}" — the agent's own chart titled "${c.title}"`));
+  return refs;
+}
 
-  return {
-    system: HOUSE_RULES,
-    prompt: `Assemble a client energy report for ${inputs.companyName ?? 'the client'} as an ordered list of sections.
-
-Client details:
+function contextBlock(inputs: ReportInputs, snapshot: MarketSnapshot, ctx: AssembleContext): string {
+  return `Client details:
 ${JSON.stringify(inputs, null, 2)}
 
 ${ctx.includeSnapshot ? snapshotForPrompt(snapshot) : '(market snapshot not attached)'}
@@ -136,18 +138,74 @@ ${ctx.dailyBrief ? `\nToday's market brief (context):\n${ctx.dailyBrief}` : ''}
 ${ctx.selectedNews?.length ? `\nAttached news headlines:\n${assembleNewsForPrompt(ctx.selectedNews)}` : ''}
 ${ctx.extraNotes ? `\nExtra context from the agent:\n${ctx.extraNotes}` : ''}
 ${inputs.agentNotes ? `\nAgent's own notes / projections:\n${inputs.agentNotes}` : ''}
-${(ctx.customCharts ?? []).length ? `\nThe agent's charts you may embed:\n${ctx.customCharts!.map((c) => `- "${c.title}" (id ${c.id}): ${c.points.map((p) => `${p.label}=${p.value}`).join(', ')}`).join('\n')}` : ''}
-
-Return ONLY JSON in exactly this shape:
-{
-  "sections": [
-    { "kind": "text",  "heading": "Executive summary", "body": "1-2 short paragraphs of plain prose" },
-    { "kind": "embed", "heading": "Market data", "ref": "<one allowed ref>" }
-  ]
+${(ctx.customCharts ?? []).length ? `\nThe agent's charts you may embed:\n${ctx.customCharts!.map((c) => `- "${c.title}" (id ${c.id}): ${c.points.map((p) => `${p.label}=${p.value}`).join(', ')}`).join('\n')}` : ''}`;
 }
 
-For every "embed" section, "ref" MUST be EXACTLY one of:
-${refs.map((r) => `- ${r}`).join('\n')}
+// Template-driven assembly: the model fills the chosen template's section
+// structure. Falls back to the default market-report shape when no template.
+export function reportAssemblePrompt(
+  inputs: ReportInputs,
+  snapshot: MarketSnapshot,
+  ctx: AssembleContext,
+  template?: DocumentTemplate | null,
+) {
+  const refs = refList(ctx);
+  const refsBlock = `For every "embed" section, "ref" MUST be EXACTLY one of:\n${refs.map((r) => `- ${r}`).join('\n')}`;
+  const shape = `Return ONLY JSON in exactly this shape:
+{
+  "sections": [
+    { "kind": "text",  "heading": "Executive summary", "body": "the prose for this section" },
+    { "kind": "embed", "heading": "Market data", "ref": "<one allowed ref>" }
+  ]
+}`;
+
+  if (template) {
+    const isEmail = template.channel === 'email';
+    const structure = template.sections
+      .map((s, i) =>
+        s.kind === 'embed'
+          ? `${i + 1}. [embed] ${s.heading ? `heading "${s.heading}", ` : ''}ref "${s.ref}"`
+          : `${i + 1}. [text] ${s.heading ? `heading "${s.heading}" — ` : ''}${s.guidance ?? ''}`,
+      )
+      .join('\n');
+
+    const emailRules = `- This is an EMAIL, not a document. Write it as ONE cohesive message: a greeting, flowing body paragraphs, and a sign-off. Do NOT use section headings, bullet points or markdown. Return each part as a "text" section with an EMPTY heading ("heading": "").
+- Sign off as the Green Shift Energy agent (use the contact/agent details if given, otherwise "The Green Shift Energy team").`;
+    const docRules = `- Follow the section structure above in order. Use the given headings. Keep each section tight and client-ready.
+- For "embed" sections, return {"kind":"embed","ref":"<the ref above>"} — do not restate the embedded figures in prose.`;
+
+    return {
+      system: HOUSE_RULES,
+      prompt: `Build "${template.name}" for ${inputs.companyName ?? 'the client'}.
+${template.guidance}
+
+${contextBlock(inputs, snapshot, ctx)}
+
+Structure to produce (one section per item, in this order):
+${structure}
+
+${shape}
+
+${refsBlock}
+
+Guidance:
+${isEmail ? emailRules : docRules}
+- Use ONLY the figures, details and evidence provided — never invent numbers or facts.
+- Weight inputs by relevance: client details anchor the personal/recommendation parts; market data drives the market parts; the agent's notes steer the tone and recommendation.
+- Plain, confident UK English. The agent reviews and edits before sending.`,
+    };
+  }
+
+  // Default (no template): the original market & procurement report shape.
+  return {
+    system: HOUSE_RULES,
+    prompt: `Assemble a client energy report for ${inputs.companyName ?? 'the client'} as an ordered list of sections.
+
+${contextBlock(inputs, snapshot, ctx)}
+
+${shape}
+
+${refsBlock}
 
 Guidance:
 - Produce a polished, well-structured client report: executive summary → market context (with a market-data / chart embed) → supporting evidence (the references/news) → outlook → a recommendation tailored to THIS client.

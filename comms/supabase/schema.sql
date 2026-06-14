@@ -126,3 +126,19 @@ create table if not exists public.headlines (
 );
 create index if not exists headlines_rank_idx on public.headlines (priority desc, created_at desc);
 alter table public.headlines enable row level security;
+
+-- User-definable document templates (seeded with built-ins on first load).
+-- `sections` is the ordered list of {kind,heading,guidance|ref} the model fills.
+create table if not exists public.document_templates (
+  id          text        primary key default gen_random_uuid()::text,
+  name        text        not null,
+  description text        not null default '',
+  channel     text        not null default 'document',
+  icon        text,
+  guidance    text        not null default '',
+  sections    jsonb       not null default '[]'::jsonb,
+  builtin     boolean     not null default false,
+  created_at  timestamptz not null default now()
+);
+create index if not exists document_templates_created_idx on public.document_templates (created_at desc);
+alter table public.document_templates enable row level security;

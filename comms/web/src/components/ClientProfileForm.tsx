@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { X, FileText, Sparkles, Loader2, FilePlus2 } from 'lucide-react';
-import { api, EMPTY_DOC, type ReportInputs, type ClientProfile, type ReportProject } from '../lib/api';
+import { X, FileText, Mail, Sparkles, Loader2, FilePlus2 } from 'lucide-react';
+import { api, EMPTY_DOC, type ReportInputs, type ClientProfile, type ReportProject, type DocumentTemplate } from '../lib/api';
 
 const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string; wide?: boolean }[] = [
   { key: 'companyName', label: 'Company', placeholder: 'Acme Manufacturing Ltd', wide: true },
@@ -14,7 +14,12 @@ const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string; wid
 
 // Step 1 of report creation: build (or pick) the client profile, optionally
 // pre-filled from a pasted call transcript, then create the project.
-export function ClientProfileForm({ onDone, onCancel }: { onDone: (p: ReportProject) => void; onCancel: () => void }) {
+export function ClientProfileForm({ onDone, onCancel, template, initialProfileId }: {
+  onDone: (p: ReportProject) => void;
+  onCancel: () => void;
+  template?: DocumentTemplate | null;
+  initialProfileId?: string;
+}) {
   const [profiles, setProfiles] = useState<ClientProfile[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [inputs, setInputs] = useState<ReportInputs>({});
@@ -25,7 +30,17 @@ export function ClientProfileForm({ onDone, onCancel }: { onDone: (p: ReportProj
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { api.profiles.list().then(setProfiles).catch(() => {}); }, []);
+  useEffect(() => {
+    api.profiles.list().then((list) => {
+      setProfiles(list);
+      if (initialProfileId && list.some((p) => p.id === initialProfileId)) {
+        setSelectedId(initialProfileId);
+        const p = list.find((x) => x.id === initialProfileId);
+        if (p) setInputs({ ...p.inputs });
+      }
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const set = (k: keyof ReportInputs, v: string) => setInputs((s) => ({ ...s, [k]: v }));
   const pickSaved = (id: string) => {
@@ -62,11 +77,14 @@ export function ClientProfileForm({ onDone, onCancel }: { onDone: (p: ReportProj
     setBusy(true);
     setErr(null);
     try {
-      // Save (or update) the reusable profile, then create the linked project.
+      // Save (or update) the reusable profile (client fields only), then create
+      // the linked project stamped with the chosen document template.
       if (selectedId) await api.profiles.update(selectedId, { inputs }).catch(() => {});
       else if (inputs.companyName?.trim()) await api.profiles.create({ inputs }).catch(() => {});
-      const name = inputs.companyName?.trim() ? `${inputs.companyName.trim()} — report` : 'Untitled report';
-      const project = await api.projects.create({ name, inputs, doc: EMPTY_DOC });
+      const docInputs: ReportInputs = template ? { ...inputs, documentTypeId: template.id, documentChannel: template.channel } : inputs;
+      const label = template ? template.name : 'report';
+      const name = inputs.companyName?.trim() ? `${inputs.companyName.trim()} — ${label}` : (template ? template.name : 'Untitled report');
+      const project = await api.projects.create({ name, inputs: docInputs, doc: EMPTY_DOC });
       onDone(project);
     } catch (e) {
       setErr(String((e as Error).message));
@@ -78,10 +96,17 @@ export function ClientProfileForm({ onDone, onCancel }: { onDone: (p: ReportProj
     <div className="fixed inset-0 z-30 bg-brand-ink/40 grid place-items-center p-4" onClick={onCancel}>
       <div className="card w-full max-w-2xl max-h-[90vh] overflow-auto p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-1">
-          <h2 className="text-lg font-semibold">New report — client profile</h2>
+          <h2 className="text-lg font-semibold">{template ? template.name : 'New report'} — client profile</h2>
           <button className="btn-ghost !px-1.5 !py-1" onClick={onCancel} title="Close"><X size={16} /></button>
         </div>
-        <p className="text-sm text-brand-muted mb-4">Capture the client’s details first — these become the report header and steer the draft.</p>
+        <p className="text-sm text-brand-muted mb-4 flex items-center gap-1.5">
+          {template && (
+            <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wide text-brand-greenDark bg-brand-tint px-1.5 py-0.5 rounded">
+              {template.channel === 'email' ? <Mail size={11} /> : <FileText size={11} />} {template.channel}
+            </span>
+          )}
+          Capture the client’s details — these become the document header and steer the draft.
+        </p>
 
         {profiles.length > 0 && (
           <div className="mb-4">

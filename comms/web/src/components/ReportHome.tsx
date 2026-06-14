@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  FileText, FilePlus2, Trash2, Pencil, Search, Building2, Clock, X, ArrowRight, Loader2,
+  FileText, FilePlus2, Trash2, Pencil, Search, Building2, Clock, X, ArrowRight,
 } from 'lucide-react';
-import { api, EMPTY_DOC, type ReportProjectSummary, type ReportProject, type ClientProfile } from '../lib/api';
+import { api, type ReportProjectSummary, type ClientProfile } from '../lib/api';
 
 function ago(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -18,16 +18,16 @@ function ago(iso: string): string {
 // The Report tab's home screen: manage saved reports and client profiles in one
 // overview, and start new work from either.
 export function ReportHome({
-  projects, onOpen, onNew, onRefresh,
+  projects, onOpen, onNew, onNewForClient, onRefresh,
 }: {
   projects: ReportProjectSummary[];
   onOpen: (id: string) => void;
   onNew: () => void;
+  onNewForClient: (profileId: string) => void;
   onRefresh: () => void;
 }) {
   const [profiles, setProfiles] = useState<ClientProfile[]>([]);
   const [query, setQuery] = useState('');
-  const [startingFrom, setStartingFrom] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const reloadProfiles = () => api.profiles.list().then(setProfiles).catch(() => {});
@@ -64,25 +64,13 @@ export function ReportHome({
     try { await api.profiles.remove(id); reloadProfiles(); }
     catch (e) { setErr(String((e as Error).message)); }
   };
-  // One click from a saved client straight into a fresh report.
-  const startFromProfile = async (p: ClientProfile) => {
-    setStartingFrom(p.id); setErr(null);
-    try {
-      const name = p.inputs.companyName?.trim() ? `${p.inputs.companyName.trim()} — report` : `${p.name} — report`;
-      const project: ReportProject = await api.projects.create({ name, inputs: { ...p.inputs }, doc: EMPTY_DOC });
-      onRefresh();
-      onOpen(project.id);
-    } catch (e) { setErr(String((e as Error).message)); }
-    finally { setStartingFrom(null); }
-  };
-
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
-          <h2 className="text-xl font-semibold">Reports</h2>
-          <p className="text-sm text-brand-muted mt-0.5">Client market reports — open one to keep working, or start fresh.</p>
+          <h2 className="text-xl font-semibold">Documents</h2>
+          <p className="text-sm text-brand-muted mt-0.5">Client reports, follow-up emails and more — open one to keep working, or start fresh.</p>
         </div>
         <div className="relative">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
@@ -98,7 +86,7 @@ export function ReportHome({
             </button>
           )}
         </div>
-        <button className="btn-primary" onClick={onNew}><FilePlus2 size={16} /> New report</button>
+        <button className="btn-primary" onClick={onNew}><FilePlus2 size={16} /> New document</button>
       </div>
 
       {err && <p className="text-sm text-up">{err}</p>}
@@ -137,12 +125,12 @@ export function ReportHome({
         <div className="card p-10 text-center">
           <FileText size={28} className="mx-auto mb-3 text-brand-green opacity-60" />
           {q ? (
-            <p className="text-sm text-brand-muted">No reports match “{query}”.</p>
+            <p className="text-sm text-brand-muted">No documents match “{query}”.</p>
           ) : (
             <>
-              <h3 className="text-base font-semibold">No reports yet</h3>
-              <p className="text-sm text-brand-muted mt-1 mb-4">Start with the client’s profile, then assemble and edit a polished A4 document.</p>
-              <button className="btn-primary mx-auto" onClick={onNew}><FilePlus2 size={16} /> Create your first report</button>
+              <h3 className="text-base font-semibold">No documents yet</h3>
+              <p className="text-sm text-brand-muted mt-1 mb-4">Pick a template — a market report, a post-call follow-up email and more — then assemble and edit it.</p>
+              <button className="btn-primary mx-auto" onClick={onNew}><FilePlus2 size={16} /> Create your first document</button>
             </>
           )}
         </div>
@@ -170,11 +158,10 @@ export function ReportHome({
                 </div>
                 <button
                   className="btn-ghost !py-1 !px-2.5 text-xs"
-                  onClick={() => startFromProfile(p)}
-                  disabled={startingFrom === p.id}
-                  title="Create a new report for this client"
+                  onClick={() => onNewForClient(p.id)}
+                  title="Create a new document for this client"
                 >
-                  {startingFrom === p.id ? <Loader2 size={13} className="animate-spin" /> : <ArrowRight size={13} />} Start report
+                  <ArrowRight size={13} /> New document
                 </button>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                   <button className="p-1 text-brand-muted hover:text-brand-ink" onClick={() => renameProfile(p)} title="Rename profile"><Pencil size={13} /></button>

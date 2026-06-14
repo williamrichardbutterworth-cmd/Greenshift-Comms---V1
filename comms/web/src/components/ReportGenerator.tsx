@@ -2,16 +2,18 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import type { Editor } from '@tiptap/react';
 import {
   Sparkles, Download, FileText, Trash2, FilePlus2, History, Save, FolderOpen, Pencil, RotateCcw,
-  Paperclip, Loader2, ChevronDown, Building2, Library, PenLine, Link2, Plus, LayoutGrid, Search, Bookmark,
+  Paperclip, Loader2, ChevronDown, Building2, Library, PenLine, Link2, Plus, LayoutGrid, Search, Bookmark, Copy,
 } from 'lucide-react';
 import {
   api, EMPTY_DOC,
   type NewsItem, type ReportInputs, type MarketSnapshot, type ReportDoc, type ContextItem,
-  type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle,
+  type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle, type DocNode,
 } from '../lib/api';
 import { CommsEditor } from '../editor/CommsEditor';
 import { PageOverview } from '../editor/PageOverview';
 import { ClientProfileForm } from './ClientProfileForm';
+import { DocumentTypePicker } from './DocumentTypePicker';
+import type { DocumentTemplate } from '../lib/api';
 import { CollapsibleSection } from './CollapsibleSection';
 import { ReportHome } from './ReportHome';
 import { buildDocFromSections } from '../lib/buildDocFromSections';
@@ -67,9 +69,14 @@ export function ReportGenerator() {
   const [showVersions, setShowVersions] = useState(false);
   const [showOpen, setShowOpen] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const [creating, setCreating] = useState(false);
+  // New-document flow: pick a template, then capture the client profile.
+  const [picking, setPicking] = useState(false);
+  const [pendingTemplate, setPendingTemplate] = useState<DocumentTemplate | null>(null);
+  const [pickProfileId, setPickProfileId] = useState<string | undefined>(undefined);
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [refUrl, setRefUrl] = useState('');
@@ -148,9 +155,14 @@ export function ReportGenerator() {
   const resetTransient = () => { setSnapshot(null); setProvider(''); setShowVersions(false); setErr(null); setFiles([]); setRefQuery(''); };
   const loadFiles = (projectId: string) => api.files.list({ projectId }).then(setFiles).catch(() => setFiles([]));
 
+  // Start the new-document flow (optionally pre-selecting a client).
+  const startNew = (profileId?: string) => { setPickProfileId(profileId); setPendingTemplate(null); setPicking(true); };
+  const onTemplatePicked = (t: DocumentTemplate) => { setPendingTemplate(t); setPicking(false); setCreating(true); };
+  const cancelCreate = () => { setCreating(false); setPendingTemplate(null); setPickProfileId(undefined); };
+
   const onProfileDone = (p: ReportProject) => {
     dirty.current = false;
-    setCreating(false);
+    setCreating(false); setPendingTemplate(null); setPickProfileId(undefined);
     setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
     resetTransient(); restoreContext(p.context); loadFiles(p.id); refreshProjects();
   };
@@ -290,6 +302,7 @@ export function ReportGenerator() {
         includeSnapshot: ctxSnapshot,
         dailyBrief,
         extraNotes: [ctxNotes, fileNotes].filter(Boolean).join('\n\n'),
+        templateId: inputs.documentTypeId,
       });
       setSnapshot(res.snapshot); setProvider(res.provider);
       if (res.provider === 'error' && res.note) setErr(`Auto-drafting unavailable (${res.note.slice(0, 150)}). Built an editable skeleton you can fill in.`);
@@ -328,15 +341,60 @@ export function ReportGenerator() {
     finally { setExporting(null); }
   };
 
+  // ── Email channel: plain-text body from the live doc ──
+  // Preserve hard breaks (greetings/signatures), number ordered lists, and label
+  // any data block that was inserted so nothing silently vanishes from the email.
+  const EMBED_LABEL: Record<string, string> = {
+    metricsTable: '[Market data table]', priceChart: '[Price chart]', customChart: '[Chart]',
+    gridMap: '[Generation map]', newsList: '[Supporting evidence]',
+  };
+  const nodeText = (n: DocNode): string =>
+    n.type === 'text' ? n.text ?? '' : n.type === 'hardBreak' ? '\n' : (n.content ?? []).map(nodeText).join('');
+  const emailText = (): string => {
+    const live = (editorRef.current?.getJSON() as ReportDoc | undefined) ?? doc;
+    return (live.content ?? [])
+      .map((n) => {
+        if (n.type === 'bulletList') return (n.content ?? []).map((li) => '- ' + nodeText(li).trim()).join('\n');
+        if (n.type === 'orderedList') return (n.content ?? []).map((li, i) => `${i + 1}. ${nodeText(li).trim()}`).join('\n');
+        if (n.type in EMBED_LABEL) return EMBED_LABEL[n.type];
+        return nodeText(n);
+      })
+      .filter((s) => s.trim())
+      .join('\n\n')
+      .trim();
+  };
+  const copyEmail = async () => {
+    const text = emailText();
+    const ok = () => { setCopied(true); setErr(null); setTimeout(() => setCopied(false), 1600); };
+    try { await navigator.clipboard.writeText(text); ok(); return; } catch { /* fall back to legacy copy below */ }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      const done = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (done) ok(); else setErr('Couldn’t copy here — use Export → Download .txt instead.');
+    } catch { setErr('Couldn’t copy here — use Export → Download .txt instead.'); }
+  };
+  const downloadTxt = () => {
+    const blob = new Blob([emailText()], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${(inputs.companyName || 'email').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-email.txt`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // ── Overview (no report open) ──
   if (!current) {
     return (
       <>
-        {creating && <ClientProfileForm onDone={onProfileDone} onCancel={() => setCreating(false)} />}
+        {picking && <DocumentTypePicker onPick={onTemplatePicked} onCancel={() => setPicking(false)} />}
+        {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} onDone={onProfileDone} onCancel={cancelCreate} />}
         <ReportHome
           projects={projects}
           onOpen={openProject}
-          onNew={() => setCreating(true)}
+          onNew={() => startNew()}
+          onNewForClient={(profileId) => startNew(profileId)}
           onRefresh={refreshProjects}
         />
         {err && <p className="text-sm text-up mt-3 text-center">{err}</p>}
@@ -347,9 +405,12 @@ export function ReportGenerator() {
   const refQ = refQuery.trim().toLowerCase();
   const shownRefs = refQ ? news.filter((n) => n.title.toLowerCase().includes(refQ) || n.source.toLowerCase().includes(refQ)) : news;
 
+  const isEmail = inputs.documentChannel === 'email';
+
   return (
     <>
-      {creating && <ClientProfileForm onDone={onProfileDone} onCancel={() => setCreating(false)} />}
+      {picking && <DocumentTypePicker onPick={onTemplatePicked} onCancel={() => setPicking(false)} />}
+      {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} onDone={onProfileDone} onCancel={cancelCreate} />}
 
       {/* Top bar */}
       <div className="card px-3 py-2 flex flex-wrap items-center gap-2 sticky top-[57px] z-20 mb-3">
@@ -362,7 +423,7 @@ export function ReportGenerator() {
           </button>
           {showOpen && (
             <div className="absolute left-0 mt-1 w-72 card p-1.5 z-30 max-h-80 overflow-auto" onMouseLeave={() => setShowOpen(false)}>
-              <button className="btn-primary w-full !py-1.5 mb-1" onClick={() => { setShowOpen(false); setCreating(true); }}><FilePlus2 size={14} /> New report</button>
+              <button className="btn-primary w-full !py-1.5 mb-1" onClick={() => { setShowOpen(false); startNew(); }}><FilePlus2 size={14} /> New document</button>
               {projects.map((p) => (
                 <div key={p.id} className={'group flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer ' + (current.id === p.id ? 'bg-brand-tint' : 'hover:bg-brand-surface')} onClick={() => { setShowOpen(false); openProject(p.id); }}>
                   <FolderOpen size={13} className="text-brand-muted shrink-0" />
@@ -395,14 +456,26 @@ export function ReportGenerator() {
         </div>
         <button className="btn-ghost !py-1.5" onClick={saveVersion} title="Snapshot current state"><Save size={15} /> <span className="hidden md:inline">Save version</span></button>
         <button className="btn-primary !py-1.5" onClick={assemble} disabled={drafting}><Sparkles size={15} /> {drafting ? 'Assembling…' : 'Assemble'}</button>
+        {isEmail && (
+          <button className="btn-ghost !py-1.5" onClick={copyEmail} title="Copy the email text to your clipboard">
+            <Copy size={15} /> {copied ? 'Copied' : 'Copy email'}
+          </button>
+        )}
         <div className="relative">
           <button className="btn-ghost !py-1.5" onClick={() => setShowExport((v) => !v)} disabled={!!exporting}>
             <Download size={15} /> {exporting ? 'Exporting…' : 'Export'} <ChevronDown size={13} />
           </button>
           {showExport && (
-            <div className="absolute right-0 mt-1 w-36 card p-1 z-30" onMouseLeave={() => setShowExport(false)}>
-              <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); download('pdf'); }}>Download PDF</button>
-              <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); download('docx'); }}>Download Word</button>
+            <div className="absolute right-0 mt-1 w-40 card p-1 z-30" onMouseLeave={() => setShowExport(false)}>
+              {isEmail && <>
+                <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); copyEmail(); }}>Copy email text</button>
+                <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); downloadTxt(); }}>Download .txt</button>
+              </>}
+              {/* A4 PDF/Word carry a market-report letterhead — only offer them for document-channel templates. */}
+              {!isEmail && <>
+                <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); download('pdf'); }}>Download PDF</button>
+                <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); download('docx'); }}>Download Word</button>
+              </>}
             </div>
           )}
         </div>
@@ -410,12 +483,12 @@ export function ReportGenerator() {
 
       {err && <p className="text-sm text-up mb-2">{err}</p>}
 
-      {/* 3-zone layout: overview · A4 page · setup */}
-      <div className="grid grid-cols-1 xl:grid-cols-[170px_minmax(0,1fr)_380px] gap-6 items-start">
-        <div className="hidden xl:block sticky top-[110px]"><PageOverview editor={editorInstance} /></div>
+      {/* 3-zone layout: page thumbnails (documents only) · page · setup */}
+      <div className={'grid grid-cols-1 gap-6 items-start ' + (isEmail ? 'xl:grid-cols-[minmax(0,1fr)_380px]' : 'xl:grid-cols-[170px_minmax(0,1fr)_380px]')}>
+        {!isEmail && <div className="hidden xl:block sticky top-[110px]"><PageOverview editor={editorInstance} /></div>}
 
         <div className="min-w-0 relative">
-          <CommsEditor docKey={docKey} initialDoc={doc} onChange={onDocChange} onReady={handleReady} onFiles={onUpload} onDropReference={onDropReference} />
+          <CommsEditor surface={isEmail ? 'email' : 'a4'} docKey={docKey} initialDoc={doc} onChange={onDocChange} onReady={handleReady} onFiles={onUpload} onDropReference={onDropReference} />
           {drafting && (
             <div className="absolute inset-0 z-10 grid place-items-center bg-white/70 backdrop-blur-[1.5px] rounded-xl">
               <div className="card px-7 py-5 text-center shadow-md max-w-xs">

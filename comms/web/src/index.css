@@ -156,6 +156,27 @@
   border-radius: 999px;
   border: 1px solid #d2d6d2;
 }
+/* ── Email canvas: a plain message sheet (no A4 page chrome) ───────────────── */
+.email-deck {
+  background: #e6e9e6;
+  padding: 28px 20px;
+}
+.email-page-wrap {
+  width: 660px;
+  max-width: 100%;
+  margin: 0 auto;
+}
+.email-sheet {
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(43, 42, 46, 0.08), 0 12px 34px -14px rgba(43, 42, 46, 0.2);
+  padding: 40px 44px;
+  min-height: 420px;
+}
+.email-sheet .report-canvas {
+  min-height: 340px;
+}
+
 /* Embedded images / media. */
 .report-canvas img,
 .report-canvas .report-image {

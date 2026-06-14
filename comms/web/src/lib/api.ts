@@ -82,6 +82,36 @@ export interface ReportInputs {
   contractEnd?: string;
   consumption?: string;
   agentNotes?: string;
+  /** Which document template this project was created from (persisted on the project). */
+  documentTypeId?: string;
+  documentChannel?: 'document' | 'email';
+}
+
+// ── Document templates (user-definable) ──
+export interface TemplateSection {
+  kind: 'text' | 'embed';
+  heading?: string;
+  guidance?: string;
+  ref?: string;
+}
+export interface DocumentTemplate {
+  id: string;
+  name: string;
+  description: string;
+  channel: 'document' | 'email';
+  icon?: string;
+  guidance: string;
+  sections: TemplateSection[];
+  builtin: boolean;
+  createdAt: string;
+}
+export interface NewTemplate {
+  name?: string;
+  description?: string;
+  channel?: 'document' | 'email';
+  icon?: string;
+  guidance?: string;
+  sections?: TemplateSection[];
 }
 export interface ReportNarrative {
   executiveSummary: string;
@@ -173,6 +203,7 @@ export interface AssembleContextPayload {
   dailyBrief?: string | null;
   extraNotes?: string;
   customCharts?: { id: string; title: string; points: CustomChartPoint[] }[];
+  templateId?: string;
 }
 export interface AssembleResult { sections: SectionSpec[]; snapshot: MarketSnapshot; provider: string; note?: string; }
 
@@ -280,6 +311,16 @@ export const api = {
         body: JSON.stringify(patch),
       }),
     remove: (id: string) => j<{ ok: boolean }>(`/api/report/projects/${id}`, { method: 'DELETE' }),
+  },
+
+  // User-definable document templates.
+  templates: {
+    list: () => j<DocumentTemplate[]>('/api/report/templates'),
+    get: (id: string) => j<DocumentTemplate>(`/api/report/templates/${id}`),
+    create: (input: NewTemplate) => j<DocumentTemplate>('/api/report/templates', postJson(input)),
+    update: (id: string, input: NewTemplate) =>
+      j<DocumentTemplate>(`/api/report/templates/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
+    remove: (id: string) => j<{ ok: boolean }>(`/api/report/templates/${id}`, { method: 'DELETE' }),
   },
 
   // Reusable client profiles.

@@ -5,6 +5,7 @@ import {
   reportNarrativePrompt, reportAssemblePrompt, reportEditPrompt, transcriptExtractPrompt,
   type ReportInputs, type AssembleContext, type EditAction,
 } from './prompts';
+import { getTemplate, type DocumentTemplate } from './templatesStore';
 import type { NewsItem } from '../providers/news/types';
 import type { MarketSnapshot } from '../providers/marketData/types';
 
@@ -78,7 +79,16 @@ function sanitiseSections(raw: unknown, ctx: AssembleContext): SectionSpec[] {
   return out;
 }
 
-function placeholderSections(ctx: AssembleContext): SectionSpec[] {
+function placeholderSections(ctx: AssembleContext, template?: DocumentTemplate | null): SectionSpec[] {
+  // Build an editable skeleton from the chosen template, so a document is still
+  // usable when automatic drafting isn't configured.
+  if (template?.sections.length) {
+    return template.sections.map((s) =>
+      s.kind === 'embed'
+        ? { kind: 'embed' as const, heading: s.heading, ref: s.ref }
+        : { kind: 'text' as const, heading: s.heading, body: `[${s.guidance || 'Write this section.'}]` },
+    );
+  }
   return [
     { kind: 'text', heading: 'Executive summary', body: '[Write the executive summary here, or use “Assemble draft” once automatic drafting is configured.]' },
     { kind: 'text', heading: 'Market context', body: '[Summarise where gas & power are and what is driving them.]' },
@@ -94,17 +104,18 @@ export async function assembleReport(
   ctx: AssembleContext,
 ): Promise<{ sections: SectionSpec[]; snapshot: MarketSnapshot; provider: string; note?: string }> {
   const snapshot = await getMarketSnapshot();
-  if (!aiConfigured()) return { sections: placeholderSections(ctx), snapshot, provider: 'none' };
+  const template = ctx.templateId ? await getTemplate(ctx.templateId).catch(() => null) : null;
+  if (!aiConfigured()) return { sections: placeholderSections(ctx, template), snapshot, provider: 'none' };
   try {
     const ai = getAI();
-    const { system, prompt } = reportAssemblePrompt(inputs, snapshot, ctx);
+    const { system, prompt } = reportAssemblePrompt(inputs, snapshot, ctx, template);
     const res = await ai.generateJSON<{ sections: unknown }>({ system, prompt, maxTokens: 2400 });
     const sections = sanitiseSections(res.sections, ctx);
-    if (!sections.length) return { sections: placeholderSections(ctx), snapshot, provider: ai.name, note: 'The draft came back empty.' };
+    if (!sections.length) return { sections: placeholderSections(ctx, template), snapshot, provider: ai.name, note: 'The draft came back empty.' };
     return { sections, snapshot, provider: ai.name };
   } catch (e) {
-    // Billing / rate-limit / network: keep the report usable rather than 500.
-    return { sections: placeholderSections(ctx), snapshot, provider: 'error', note: (e as Error).message };
+    // Billing / rate-limit / network: keep the document usable rather than 500.
+    return { sections: placeholderSections(ctx, template), snapshot, provider: 'error', note: (e as Error).message };
   }
 }
 
