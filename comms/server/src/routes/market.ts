@@ -1,11 +1,18 @@
 import type { FastifyInstance } from 'fastify';
 import { getMarketSnapshot } from '../providers/marketData';
+import { getGridSnapshot } from '../services/gridSnapshot';
 import { getPriceHistory, SERIES_META, type SeriesKey, type RangeKey } from '../services/priceHistory';
 
 export async function marketRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/market', async (_req, reply) => {
     reply.header('Cache-Control', 'public, s-maxage=900, stale-while-revalidate=1800');
     return getMarketSnapshot();
+  });
+
+  // UK generation map data: regional carbon intensity + per-interconnector flows.
+  app.get('/api/grid', async (_req, reply) => {
+    reply.header('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=900');
+    return getGridSnapshot();
   });
 
   // Which price series can be charted on a report.

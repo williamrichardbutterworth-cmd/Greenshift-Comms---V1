@@ -6,8 +6,9 @@ import {
   TabStopType, TabStopPosition,
 } from 'docx';
 import { renderLineChartSVG, type ChartOptions } from './chartSvg';
+import { renderGridMapSVG, gridMapHeight } from './gridMapSvg';
 import { inlineRuns, plainText, hasMarks, pdfFontStyle, inlineToDocx } from './serializeDoc';
-import type { ReportDoc, DocNode, ReportInputs, ReportMeta, MetricRow, ChartData, NewsRef, CustomChartData } from './api';
+import type { ReportDoc, DocNode, ReportInputs, ReportMeta, MetricRow, ChartData, NewsRef, CustomChartData, GridSnapshot } from './api';
 
 // Branded client-side report export — no server, no Puppeteer. Walks the TipTap
 // document (headings, rich paragraphs, lists, quotes + the embedded metrics /
@@ -102,6 +103,34 @@ const customChartOpts = (d: CustomChartData): ChartOptions => ({
 
 const fileBase = (inputs: ReportInputs) => (inputs.companyName || 'energy-report').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
 const nodes = (doc: ReportDoc): DocNode[] => doc.content ?? [];
+
+// Drop a generation-map block whose snapshot never loaded (it would render nothing)
+// together with the heading that solely introduces it — avoids an orphan heading
+// if a report is exported in the brief window before the map's data resolves.
+function exportNodes(doc: ReportDoc): DocNode[] {
+  const ns = nodes(doc);
+  const out: DocNode[] = [];
+  for (let i = 0; i < ns.length; i++) {
+    const n = ns[i];
+    if (n.type === 'gridMap' && !(n.attrs as { snapshot?: unknown } | undefined)?.snapshot) {
+      const prev = ns[i - 1];
+      if (prev && prev.type === 'heading' && out[out.length - 1] === prev) out.pop();
+      continue;
+    }
+    out.push(n);
+  }
+  return out;
+}
+
+// Generation-map block → rasterised SVG. Rendered at a larger width for a crisp
+// export; the height is derived deterministically from the same layout module.
+const GRID_MAP_W = 700;
+function gridMapCaption(s: GridSnapshot): string {
+  if (!s.interconnectors?.length) return 'Estimated regional carbon intensity (NESO model).';
+  const net = s.interconnectors.reduce((a, i) => a + i.mw, 0);
+  const top = s.interconnectors.slice(0, 3).map((i) => `${i.name} ${Math.abs(i.mw).toLocaleString('en-GB')}MW`).join(', ');
+  return `Net interconnector ${net >= 0 ? 'import' : 'export'} ${Math.abs(net).toLocaleString('en-GB')} MW — ${top}. Estimated regional carbon intensity (NESO model).`;
+}
 
 // ───────────────────────── PDF (jsPDF) ─────────────────────────
 
@@ -285,6 +314,21 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
     }
   };
 
+  const pdfGridMap = async (snap: GridSnapshot | null, mode: 'intensity' | 'fuel') => {
+    if (!snap?.regions?.length) return;
+    const svgH = gridMapHeight(GRID_MAP_W);
+    const png = await svgToPngDataUrl(renderGridMapSVG({ regions: snap.regions, mode, width: GRID_MAP_W }), GRID_MAP_W, svgH);
+    const w = Math.min(cW, 340);
+    const h = (svgH / GRID_MAP_W) * w;
+    ensure(h + 6);
+    pdf.addImage(png, 'PNG', M, y, w, h, undefined, 'MEDIUM');
+    y += h + 4;
+    const cap = gridMapCaption(snap);
+    pdf.setFont('helvetica', 'italic').setFontSize(8.5).setTextColor(...RGB.muted);
+    for (const ln of pdf.splitTextToSize(cap, cW)) { ensure(11); pdf.text(ln, M, y); y += 11; }
+    y += 2;
+  };
+
   const pdfNews = (items: NewsRef[]) => {
     pdf.setFont('helvetica', 'normal').setFontSize(10).setTextColor(...RGB.ink);
     for (const it of items) {
@@ -304,7 +348,7 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
     y += h + 8;
   };
 
-  for (const node of nodes(doc)) {
+  for (const node of exportNodes(doc)) {
     switch (node.type) {
       case 'heading': pdfHeading(node); break;
       case 'paragraph': pdfParagraph(node); break;
@@ -319,6 +363,7 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
         break;
       }
       case 'newsList': pdfNews((node.attrs?.items as NewsRef[]) ?? []); break;
+      case 'gridMap': await pdfGridMap(node.attrs?.snapshot as GridSnapshot | null, (node.attrs?.mode as 'intensity' | 'fuel') ?? 'intensity'); break;
       case 'image': await pdfImage(node); break;
       default: if (node.content?.length) pdfParagraph(node);
     }
@@ -475,7 +520,7 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
     children.push(new Paragraph({ spacing: { after: 120 }, children: [] }));
   }
 
-  for (const node of nodes(doc)) {
+  for (const node of exportNodes(doc)) {
     switch (node.type) {
       case 'heading': children.push(docHeadingNode(node)); break;
       case 'paragraph': children.push(new Paragraph({ spacing: { after: 120 }, children: inlineToDocx(node) })); break;
@@ -503,6 +548,18 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
       case 'newsList': {
         for (const it of (node.attrs?.items as NewsRef[]) ?? []) {
           children.push(new Paragraph({ bullet: { level: 0 }, spacing: { after: 40 }, children: [new TextRun({ text: `${it.source}: `, bold: true }), new TextRun({ text: it.title })] }));
+        }
+        break;
+      }
+      case 'gridMap': {
+        const snap = node.attrs?.snapshot as GridSnapshot | null;
+        if (snap?.regions?.length) {
+          const svgH = gridMapHeight(GRID_MAP_W);
+          const png = dataUrlToBytes(await svgToPngDataUrl(renderGridMapSVG({ regions: snap.regions, mode: (node.attrs?.mode as 'intensity' | 'fuel') ?? 'intensity', width: GRID_MAP_W }), GRID_MAP_W, svgH));
+          const w = 360;
+          const h = Math.round((svgH / GRID_MAP_W) * w);
+          children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: w, height: h } })] }));
+          children.push(new Paragraph({ spacing: { before: 40 }, children: [new TextRun({ text: gridMapCaption(snap), italics: true, size: 16, color: '6B6A70' })] }));
         }
         break;
       }

@@ -19,6 +19,24 @@ export interface MarketSnapshot {
   generationMix: FuelShare[];
   sources: SourceRef[];
 }
+
+// ── Generation map (GET /api/grid) ──
+export type GridIndex = 'very low' | 'low' | 'moderate' | 'high' | 'very high' | null;
+export interface GridRegion {
+  id: number; name: string; dno: string;
+  intensity: number | null; index: GridIndex; mix: FuelShare[];
+}
+export interface Interconnector {
+  code: string; name: string; country: string;
+  mw: number; dir: 'import' | 'export' | 'idle';
+}
+export interface GridSnapshot {
+  asOf: string;
+  national: { intensity: number | null; index: GridIndex; mix: FuelShare[] };
+  regions: GridRegion[];
+  interconnectors: Interconnector[];
+  sources: SourceRef[];
+}
 export interface NewsItem {
   id: string;
   title: string;
@@ -214,6 +232,7 @@ const postJson = (body: unknown): RequestInit => ({
 
 export const api = {
   market: () => j<MarketSnapshot>('/api/market'),
+  grid: () => j<GridSnapshot>('/api/grid'),
   marketSeries: () => j<SeriesMeta[]>('/api/market/series'),
   marketHistory: (series: SeriesKey, range: RangeKey) =>
     j<PriceSeries>(`/api/market/history?series=${series}&range=${range}`),

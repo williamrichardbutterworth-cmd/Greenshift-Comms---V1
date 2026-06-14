@@ -7,13 +7,14 @@ import Image from '@tiptap/extension-image';
 import {
   Bold, Italic, Heading2, Heading3, List, ListOrdered, Quote, Link2,
   Table2, LineChart as LineChartIcon, BarChart3, Newspaper, Plus,
-  Sparkles, ChevronDown, Loader2,
+  Sparkles, ChevronDown, Loader2, Map as MapIcon,
 } from 'lucide-react';
 import { api, type ReportDoc, type EditAction } from '../lib/api';
 import { MetricsTable, metricToRow } from './nodes/MetricsTable';
 import { PriceChart, defaultChart } from './nodes/PriceChart';
 import { NewsList } from './nodes/NewsList';
 import { CustomChart, defaultCustomChart } from './nodes/CustomChart';
+import { GridMap, defaultGridMap } from './nodes/GridMap';
 
 const A4_PAGE_H = 1122; // A4 @96dpi (matches .report-sheet in index.css)
 const heading2 = (text: string) => ({ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text }] });
@@ -35,6 +36,7 @@ export const editorExtensions = [
   PriceChart,
   NewsList,
   CustomChart,
+  GridMap,
 ];
 
 function ToolbarButton({
@@ -153,6 +155,7 @@ export function CommsEditor({
   const addPriceChart = () => addHeadingAndNode({ type: 'priceChart', attrs: { chart: defaultChart() } }, 'Price trend');
   const addCustomChart = () => addHeadingAndNode({ type: 'customChart', attrs: { data: defaultCustomChart() } }, 'Custom analysis');
   const addNews = () => addHeadingAndNode({ type: 'newsList', attrs: { items: [] } }, 'Supporting evidence');
+  const addGridMap = () => addHeadingAndNode({ type: 'gridMap', attrs: defaultGridMap() }, 'Generation map');
 
   const setLink = () => {
     const prev = (editor.getAttributes('link').href as string) ?? '';
@@ -223,6 +226,7 @@ export function CommsEditor({
         <ToolbarButton title="Market metrics" onClick={addMetrics}><Table2 size={15} /></ToolbarButton>
         <ToolbarButton title="Price chart" onClick={addPriceChart}><LineChartIcon size={15} /></ToolbarButton>
         <ToolbarButton title="Custom chart" onClick={addCustomChart}><BarChart3 size={15} /></ToolbarButton>
+        <ToolbarButton title="Generation map" onClick={addGridMap}><MapIcon size={15} /></ToolbarButton>
         <ToolbarButton title="News evidence" onClick={addNews}><Newspaper size={15} /></ToolbarButton>
       </div>
 

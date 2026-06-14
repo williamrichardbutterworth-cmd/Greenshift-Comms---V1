@@ -56,6 +56,7 @@ export interface SectionSpec {
 
 const VALID_REF = (ref: string, ctx: AssembleContext): boolean =>
   ref === 'marketSnapshot' ||
+  ref === 'generationMap' ||
   ref === 'selectedNews' ||
   /^chart:(brent|gas|power):(3m|6m|12m)$/.test(ref) ||
   (ctx.customCharts ?? []).some((c) => ref === `customChart:${c.id}`);

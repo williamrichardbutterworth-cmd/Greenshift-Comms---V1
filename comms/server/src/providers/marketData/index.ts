@@ -4,6 +4,7 @@ import { ElexonProvider } from './elexon';
 import { NationalGasProvider } from './nationalGas';
 import { HeadlinePriceProvider } from './headlinePrice';
 import { BrentProvider } from './brent';
+import { CarbonIntensityProvider } from './carbonIntensity';
 import type { MarketSnapshot, Metric, SourceRef, FuelShare, MarketDataProvider } from './types';
 
 // Live providers run in parallel; whatever each returns is merged OVER the
@@ -15,6 +16,7 @@ const liveProviders: MarketDataProvider[] = [
   new NationalGasProvider(),
   new HeadlinePriceProvider(),
   new BrentProvider(),
+  new CarbonIntensityProvider(),
 ];
 
 export async function getMarketSnapshot(): Promise<MarketSnapshot> {

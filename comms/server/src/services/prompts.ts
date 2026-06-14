@@ -120,6 +120,7 @@ export function reportAssemblePrompt(inputs: ReportInputs, snapshot: MarketSnaps
   const refs: string[] = [];
   if (ctx.includeSnapshot) refs.push('"marketSnapshot" — the live market metrics table');
   refs.push('"chart:brent:12m" — a price-trend chart (series may be brent|gas|power; range may be 3m|6m|12m)');
+  refs.push('"generationMap" — a UK map of regional grid carbon intensity + live interconnector flows (use at most once, where grid/sustainability context helps)');
   if (ctx.selectedNews?.length) refs.push('"selectedNews" — the attached news headlines, as a bulleted list');
   (ctx.customCharts ?? []).forEach((c) => refs.push(`"customChart:${c.id}" — the agent's own chart titled "${c.title}"`));
 

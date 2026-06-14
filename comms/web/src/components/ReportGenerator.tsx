@@ -306,9 +306,17 @@ export function ReportGenerator() {
     if (!liveDoc.content?.length) return;
     setExporting(fmt); setErr(null);
     try {
-      let attributions = (snapshot?.sources ?? []).filter((s) => s.attribution).map((s) => s.attribution!);
+      const attributions = (snapshot?.sources ?? []).filter((s) => s.attribution).map((s) => s.attribution!);
       if (!attributions.length && docHasMarketData(liveDoc)) {
-        try { const m = await api.market(); attributions = m.sources.filter((s) => s.attribution).map((s) => s.attribution!); } catch { /* ignore */ }
+        try { const m = await api.market(); attributions.push(...m.sources.filter((s) => s.attribution).map((s) => s.attribution!)); } catch { /* ignore */ }
+      }
+      // Generation-map blocks carry their own NESO (CC BY 4.0) + Elexon attributions —
+      // these MUST appear in the export even when there's no metrics table or chart.
+      for (const n of liveDoc.content ?? []) {
+        if (n.type === 'gridMap') {
+          const sources = (n.attrs as { snapshot?: { sources?: { attribution?: string }[] } } | undefined)?.snapshot?.sources ?? [];
+          for (const s of sources) if (s.attribution && !attributions.includes(s.attribution)) attributions.push(s.attribution);
+        }
       }
       const meta = { asOf: snapshot?.asOf, attributions };
       const exp = await import('../lib/exportReport');
