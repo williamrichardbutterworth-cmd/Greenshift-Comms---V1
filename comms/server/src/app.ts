@@ -19,6 +19,15 @@ export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
   await app.register(cors, { origin: true }); // harmless: API is same-origin on Vercel
 
+  // Friendly pointer for anyone opening the backend directly. In prod the
+  // Vercel rewrites send "/" to the SPA, so this only ever serves in local dev.
+  app.get('/', async () => ({
+    ok: true,
+    service: 'Comms API',
+    health: '/api/health',
+    note: 'This is the backend — the app itself runs on the web dev server (local: http://localhost:5273).',
+  }));
+
   app.get('/api/health', async () => ({
     ok: true,
     aiProvider: config.aiProvider,

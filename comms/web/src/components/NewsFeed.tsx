@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ExternalLink, Bookmark, BookmarkCheck, Pin, PinOff, Trash2, Settings2, Plus, Rss, Link2, Loader2,
+  Search, RefreshCw, Newspaper, X,
 } from 'lucide-react';
 import { api, type NewsItem, type SavedArticle, type Headline, type NewsFeedSource } from '../lib/api';
 
@@ -25,24 +26,31 @@ interface Displayable { id: string; title: string; source: string; url: string; 
 export function NewsFeed() {
   const [tab, setTab] = useState<Tab>('live');
   const [topic, setTopic] = useState('all');
+  const [query, setQuery] = useState('');
   const [live, setLive] = useState<NewsItem[]>([]);
   const [headlines, setHeadlines] = useState<Headline[]>([]);
   const [library, setLibrary] = useState<SavedArticle[]>([]);
   const [feeds, setFeeds] = useState<NewsFeedSource[]>([]);
   const [topics, setTopics] = useState<string[]>([]);
   const [manage, setManage] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [urlInput, setUrlInput] = useState('');
   const [addingUrl, setAddingUrl] = useState(false);
 
+  const reloadLive = () => {
+    setRefreshing(true);
+    return api.news(24).then(setLive).catch((e) => setErr(String(e.message))).finally(() => setRefreshing(false));
+  };
   const reloadLib = () => api.savedArticles.list().then(setLibrary).catch(() => {});
   const reloadHl = () => api.headlines.list().then(setHeadlines).catch(() => {});
   const reloadFeeds = () => api.newsFeeds.list().then(setFeeds).catch(() => {});
 
   useEffect(() => {
-    api.news(24).then(setLive).catch((e) => setErr(String(e.message)));
+    reloadLive();
     api.newsTopics().then(setTopics).catch(() => {});
     reloadHl(); reloadLib(); reloadFeeds();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const savedTitles = new Set(library.map((a) => a.title));
@@ -64,12 +72,29 @@ export function NewsFeed() {
   const list: Displayable[] = tab === 'live' ? live.map((n) => ({ ...n, publishedAt: n.publishedAt }))
     : tab === 'headlines' ? headlines
     : library;
-  const shown = topic === 'all' ? list : list.filter((i) => (i.topic || 'other') === topic);
-  const present = new Set(list.map((i) => i.topic || 'other'));
+
+  const q = query.trim().toLowerCase();
+  const matchesQuery = (i: Displayable) =>
+    !q || i.title.toLowerCase().includes(q) || (i.summary ?? '').toLowerCase().includes(q) || i.source.toLowerCase().includes(q);
+
+  const searched = useMemo(() => list.filter(matchesQuery), [list, q]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = topic === 'all' ? searched : searched.filter((i) => (i.topic || 'other') === topic);
+
+  // Topic chips with counts, computed over the search-filtered list.
+  const topicCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const i of searched) {
+      const t = i.topic || 'other';
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return counts;
+  }, [searched]);
+
   const tabCount = (t: Tab) => (t === 'live' ? live.length : t === 'headlines' ? headlines.length : library.length);
 
   return (
     <div className="space-y-4">
+      {/* Header row: tabs · search · actions */}
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">News</h2>
         <div className="flex gap-1 ml-2">
@@ -78,14 +103,39 @@ export function NewsFeed() {
               key={t}
               onClick={() => { setTab(t); setTopic('all'); }}
               className={'text-sm px-3 py-1.5 rounded-lg border transition capitalize ' +
-                (tab === t ? 'border-brand-green bg-brand-tint text-brand-ink' : 'border-brand-line text-brand-muted hover:text-brand-ink')}
+                (tab === t ? 'border-brand-green bg-brand-tint text-brand-ink font-medium' : 'border-brand-line text-brand-muted hover:text-brand-ink')}
             >
-              {t === 'live' ? 'Live feed' : t}{tabCount(t) ? <span className="font-mono text-xs ml-1">{tabCount(t)}</span> : ''}
+              {t === 'live' ? 'Live feed' : t}
+              {tabCount(t) ? <span className="font-mono text-xs ml-1 opacity-70">{tabCount(t)}</span> : ''}
             </button>
           ))}
         </div>
         <div className="flex-1" />
-        <button className="btn-ghost !py-1.5" onClick={() => setManage((m) => !m)}><Settings2 size={15} /> Manage feeds</button>
+        <div className="relative">
+          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+          <input
+            className="input !py-1.5 !pl-8 !w-52 text-sm"
+            placeholder="Search articles…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query && (
+            <button className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-muted hover:text-brand-ink" onClick={() => setQuery('')} title="Clear search">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        {tab === 'live' && (
+          <button className="btn-ghost !py-1.5 !px-2.5" onClick={reloadLive} disabled={refreshing} title="Refresh the live feed">
+            <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+          </button>
+        )}
+        <button
+          className={'btn-ghost !py-1.5 ' + (manage ? '!border-brand-green !bg-brand-tint' : '')}
+          onClick={() => setManage((m) => !m)}
+        >
+          <Settings2 size={15} /> Manage feeds
+        </button>
       </div>
 
       {/* Prominent: add & summarise an article into your library */}
@@ -106,37 +156,59 @@ export function NewsFeed() {
 
       {manage && <FeedsPanel feeds={feeds} onChange={reloadFeeds} onErr={setErr} />}
 
-      {/* Topic filters */}
+      {/* Topic filters with counts */}
       <div className="flex flex-wrap gap-1.5">
-        {['all', ...topics.filter((t) => present.has(t)), ...(present.has('other') ? ['other'] : [])].map((t) => (
+        <button
+          onClick={() => setTopic('all')}
+          className={'text-xs px-2.5 py-1 rounded-full border transition ' +
+            (topic === 'all' ? 'border-brand-green bg-brand-tint text-brand-ink font-medium' : 'border-brand-line text-brand-muted hover:text-brand-ink')}
+        >
+          All topics <span className="font-mono opacity-70">{searched.length}</span>
+        </button>
+        {[...topics.filter((t) => topicCounts.has(t)), ...(topicCounts.has('other') && !topics.includes('other') ? ['other'] : [])].map((t) => (
           <button
             key={t}
             onClick={() => setTopic(t)}
             className={'text-xs px-2.5 py-1 rounded-full border transition ' +
-              (topic === t ? 'border-brand-green bg-brand-tint text-brand-ink' : 'border-brand-line text-brand-muted hover:text-brand-ink')}
+              (topic === t ? 'border-brand-green bg-brand-tint text-brand-ink font-medium' : 'border-brand-line text-brand-muted hover:text-brand-ink')}
           >
-            {t === 'all' ? 'All topics' : TOPIC_LABEL[t] ?? t}
+            {TOPIC_LABEL[t] ?? t} <span className="font-mono opacity-70">{topicCounts.get(t)}</span>
           </button>
         ))}
       </div>
 
       {err && <p className="text-sm text-up">{err}</p>}
 
-      <ul className="space-y-2">
+      <ul className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {shown.map((i) => (
-          <li key={i.id} className="card p-4">
-            <div className="flex items-center gap-2 text-[11px] text-brand-muted mb-1">
+          <li key={i.id} className="card p-4 flex flex-col transition hover:shadow-md">
+            <div className="flex items-center gap-2 text-[11px] text-brand-muted mb-1.5">
               <span className="font-medium text-brand-greenDark">{i.source || 'Source'}</span>
               {i.publishedAt && <><span>·</span><span>{ago(i.publishedAt)}</span></>}
-              {i.topic && <span className="ml-auto text-[10px] uppercase tracking-wide bg-brand-tint text-brand-greenDark px-1.5 py-0.5 rounded">{TOPIC_LABEL[i.topic] ?? i.topic}</span>}
+              {i.topic && (
+                <button
+                  className="ml-auto text-[10px] uppercase tracking-wide bg-brand-tint text-brand-greenDark px-1.5 py-0.5 rounded hover:bg-brand-green/15"
+                  onClick={() => setTopic(i.topic || 'other')}
+                  title="Filter by this topic"
+                >
+                  {TOPIC_LABEL[i.topic] ?? i.topic}
+                </button>
+              )}
             </div>
-            <a href={i.url || undefined} target="_blank" rel="noreferrer" className="text-[15px] font-medium hover:text-brand-green inline-flex items-start gap-1">
+            <a href={i.url || undefined} target="_blank" rel="noreferrer" className="text-[15px] font-medium leading-snug hover:text-brand-green inline-flex items-start gap-1">
               {i.title}
               {i.url && <ExternalLink size={13} className="mt-1 shrink-0 text-brand-muted" />}
             </a>
-            {i.summary && <p className="text-sm text-brand-muted mt-1 leading-snug">{i.summary}</p>}
+            {i.summary && (
+              <p
+                className="text-sm text-brand-muted mt-1.5 leading-snug overflow-hidden"
+                style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}
+              >
+                {i.summary}
+              </p>
+            )}
 
-            <div className="flex items-center gap-1.5 mt-2">
+            <div className="flex items-center gap-1.5 mt-auto pt-3">
               {tab === 'library'
                 ? <ActionBtn onClick={() => unsave(i.id)} icon={Trash2} label="Remove" danger />
                 : savedTitles.has(i.title)
@@ -151,9 +223,11 @@ export function NewsFeed() {
           </li>
         ))}
         {!shown.length && (
-          <li className="card p-8 text-center text-brand-muted text-sm">
-            {tab === 'library' ? 'No saved articles yet — Save articles from the Live feed to build your library.'
-              : tab === 'headlines' ? 'No headlines pinned yet — Pin the big stories so they persist here.'
+          <li className="card p-10 text-center text-brand-muted text-sm lg:col-span-2">
+            <Newspaper size={22} className="mx-auto mb-2 opacity-50" />
+            {q ? <>Nothing matches “{query}” here.</>
+              : tab === 'library' ? 'No saved articles yet — Save articles from the Live feed, or paste a URL above to build your library.'
+              : tab === 'headlines' ? 'No headlines pinned yet — Pin the big stories so they persist here for the whole team.'
               : 'No articles in this view.'}
           </li>
         )}
@@ -177,6 +251,22 @@ function ActionBtn({ onClick, icon: Icon, label, active, danger }: { onClick?: (
   );
 }
 
+// iOS-style switch for enabling/disabling a feed.
+function Switch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={onToggle}
+      className={'relative h-[18px] w-8 rounded-full transition shrink-0 ' + (on ? 'bg-brand-green' : 'bg-brand-line')}
+      title={on ? 'Disable source' : 'Enable source'}
+    >
+      <span className={'absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white shadow transition-all ' + (on ? 'left-[15px]' : 'left-0.5')} />
+    </button>
+  );
+}
+
 function FeedsPanel({ feeds, onChange, onErr }: { feeds: NewsFeedSource[]; onChange: () => void; onErr: (s: string) => void }) {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
@@ -192,24 +282,31 @@ function FeedsPanel({ feeds, onChange, onErr }: { feeds: NewsFeedSource[]; onCha
   const toggle = async (f: NewsFeedSource) => { try { await api.newsFeeds.setEnabled(f.id, !f.enabled); onChange(); } catch (e) { onErr(String((e as Error).message)); } };
   const remove = async (id: string) => { try { await api.newsFeeds.remove(id); onChange(); } catch (e) { onErr(String((e as Error).message)); } };
 
+  const enabled = feeds.filter((f) => f.enabled).length;
+
   return (
     <div className="card p-4 space-y-3">
-      <div className="flex items-center gap-2"><Rss size={15} className="text-brand-green" /><h3 className="text-sm font-semibold">Sources</h3></div>
-      <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <Rss size={15} className="text-brand-green" />
+        <h3 className="text-sm font-semibold">Sources</h3>
+        <span className="text-[11px] text-brand-muted">{enabled} of {feeds.length} enabled — the Live feed pulls from every enabled source</span>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1">
         {feeds.map((f) => (
-          <div key={f.id} className="flex items-center gap-2 text-sm">
-            <input type="checkbox" className="accent-brand-green" checked={f.enabled} onChange={() => toggle(f)} />
-            <span className={'flex-1 truncate ' + (f.enabled ? '' : 'text-brand-muted line-through')} title={f.url}>{f.name}</span>
-            <span className="text-[11px] text-brand-muted/70 truncate max-w-[180px] hidden sm:inline">{f.url}</span>
-            <button className="text-brand-muted hover:text-up shrink-0" onClick={() => remove(f.id)} title="Remove source"><Trash2 size={13} /></button>
+          <div key={f.id} className="group flex items-center gap-2.5 text-sm py-1">
+            <Switch on={f.enabled} onToggle={() => toggle(f)} />
+            <span className={'flex-1 truncate ' + (f.enabled ? '' : 'text-brand-muted')} title={f.url}>{f.name}</span>
+            <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0 transition" onClick={() => remove(f.id)} title="Remove source"><Trash2 size={13} /></button>
           </div>
         ))}
         {!feeds.length && <p className="text-xs text-brand-muted">No sources yet.</p>}
       </div>
-      <div className="flex flex-wrap gap-2 pt-1 border-t border-brand-line">
+      <div className="flex flex-wrap gap-2 pt-2 border-t border-brand-line">
         <input className="input !py-1.5 !w-auto flex-1 min-w-[120px] text-sm" placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
-        <input className="input !py-1.5 flex-[2] min-w-[180px] text-sm" placeholder="https://… RSS / Atom URL" value={url} onChange={(e) => setUrl(e.target.value)} />
-        <button className="btn-ghost !py-1.5" onClick={add} disabled={busy || !url.trim()}><Plus size={15} /> Add</button>
+        <input className="input !py-1.5 flex-[2] min-w-[180px] text-sm" placeholder="https://… RSS / Atom URL" value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
+        <button className="btn-ghost !py-1.5" onClick={add} disabled={busy || !url.trim()}>
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} Add source
+        </button>
       </div>
     </div>
   );

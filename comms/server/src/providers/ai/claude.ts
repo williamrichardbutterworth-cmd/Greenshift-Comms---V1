@@ -15,10 +15,10 @@ export class ClaudeProvider implements AIProvider {
   }
 
   async generateText(opts: AIGenerateOptions): Promise<string> {
-    // Note: Claude Opus 4.7/4.8 removed the sampling params (temperature/top_p/
-    // top_k) — sending them returns a 400. Steer via the prompt instead. Older
-    // models simply fall back to their default sampling, so omitting it is safe
-    // across every supported model.
+    // Note: Claude Fable 5 / Opus 4.7+ removed the sampling params (temperature/
+    // top_p/top_k) — sending them returns a 400. Fable 5 also rejects an explicit
+    // thinking:{type:'disabled'}, so the thinking param must stay omitted entirely.
+    // Steer via the prompt instead; older models fall back to default sampling.
     const msg = await this.client.messages.create({
       model: config.claudeModel,
       max_tokens: opts.maxTokens ?? 1024,

@@ -2,7 +2,8 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
   Document, Packer, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell,
-  WidthType, BorderStyle, AlignmentType, LevelFormat,
+  WidthType, BorderStyle, AlignmentType, LevelFormat, Header, Footer, PageNumber, ShadingType,
+  TabStopType, TabStopPosition,
 } from 'docx';
 import { renderLineChartSVG, type ChartOptions } from './chartSvg';
 import { inlineRuns, plainText, hasMarks, pdfFontStyle, inlineToDocx } from './serializeDoc';
@@ -112,9 +113,12 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
   const cW = W - M * 2;
   let y = M;
 
-  const ensure = (need: number) => { if (y + need > H - M) { pdf.addPage(); y = M; } };
+  // Reserve room for the running footer; continuation pages start below the
+  // running header (both drawn in a post-pass once the page count is known).
+  const FOOTER_H = 34;
+  const ensure = (need: number) => { if (y + need > H - M - FOOTER_H) { pdf.addPage(); y = M + 14; } };
 
-  // — Header (unchanged) —
+  // — Branded cover header —
   const logo = await loadImage('/gse.png');
   if (logo) pdf.addImage(logo.dataUrl, 'PNG', M, y, 110, (logo.h / logo.w) * 110, undefined, 'FAST');
   pdf.setFontSize(9).setTextColor(...RGB.muted);
@@ -122,22 +126,34 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
   pdf.text(dateStr(), W - M, y + 20, { align: 'right' });
   y += 42;
   pdf.setDrawColor(...RGB.green).setLineWidth(2).line(M, y, W - M, y);
-  y += 22;
-  pdf.setFont('helvetica', 'bold').setFontSize(20).setTextColor(...RGB.ink).text('Energy Market Report', M, y);
-  y += 16;
-  pdf.setFont('helvetica', 'normal').setFontSize(10).setTextColor(...RGB.muted)
+  y += 26;
+  pdf.setFont('helvetica', 'bold').setFontSize(22).setTextColor(...RGB.ink).text('Energy Market Report', M, y);
+  y += 17;
+  pdf.setFont('helvetica', 'normal').setFontSize(10.5).setTextColor(...RGB.muted)
     .text('Prepared for ' + (inputs.companyName || inputs.clientName || 'your business'), M, y);
-  y += 20;
-  pdf.setFontSize(9);
-  for (const [k, v] of detailRows(inputs)) {
-    if (!v) continue;
-    ensure(14);
-    pdf.setFont('helvetica', 'bold').setTextColor(...RGB.muted).text(`${k}: `, M, y);
-    const kw = pdf.getTextWidth(`${k}: `);
-    pdf.setFont('helvetica', 'normal').setTextColor(...RGB.ink).text(v, M + kw, y);
-    y += 13;
+  y += 16;
+
+  // Client details in a tinted two-column panel.
+  const details = detailRows(inputs).filter(([, v]) => v) as [string, string][];
+  if (details.length) {
+    const colW = (cW - 42) / 2;
+    const rowH = 26;
+    const nRows = Math.ceil(details.length / 2);
+    const panelH = nRows * rowH + 12;
+    pdf.setFillColor(244, 250, 239);
+    pdf.setDrawColor(...RGB.line);
+    pdf.roundedRect(M, y, cW, panelH, 6, 6, 'FD');
+    details.forEach(([k, v], i) => {
+      const px = M + 14 + (i % 2) * (colW + 14);
+      const py = y + 17 + Math.floor(i / 2) * rowH;
+      pdf.setFont('helvetica', 'bold').setFontSize(7).setTextColor(...RGB.greenDark).text(k.toUpperCase(), px, py);
+      pdf.setFont('helvetica', 'normal').setFontSize(9.5).setTextColor(...RGB.ink);
+      pdf.text(pdf.splitTextToSize(String(v), colW)[0] ?? '', px, py + 11);
+    });
+    y += panelH + 20;
+  } else {
+    y += 8;
   }
-  y += 10;
 
   // — Node renderers —
   const pdfHeading = (node: DocNode) => {
@@ -145,8 +161,9 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
     const text = plainText(node);
     if (!text) return;
     if (level <= 2) {
-      ensure(26);
-      pdf.setFont('helvetica', 'bold').setFontSize(11).setTextColor(...RGB.greenDark).text(text.toUpperCase(), M, y);
+      ensure(28);
+      pdf.setFillColor(...RGB.green).rect(M, y - 8.5, 3, 11, 'F');
+      pdf.setFont('helvetica', 'bold').setFontSize(11).setTextColor(...RGB.greenDark).text(text.toUpperCase(), M + 9, y);
       y += 5;
       pdf.setDrawColor(...RGB.line).setLineWidth(0.5).line(M, y, W - M, y);
       y += 12;
@@ -308,15 +325,33 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
     y += 6;
   }
 
-  // — Footer disclaimer + attribution (unchanged) —
-  ensure(64);
-  const fy = H - 52;
-  pdf.setDrawColor(...RGB.line).setLineWidth(0.5).line(M, fy - 8, W - M, fy - 8);
+  // — Disclaimer + attribution flow at the end of the content —
+  ensure(44);
+  y += 6;
+  pdf.setDrawColor(...RGB.line).setLineWidth(0.5).line(M, y, W - M, y);
+  y += 12;
   pdf.setFont('helvetica', 'italic').setFontSize(7.5).setTextColor(...RGB.muted);
-  pdf.text(pdf.splitTextToSize(DISCLAIMER, cW), M, fy);
+  for (const ln of pdf.splitTextToSize(DISCLAIMER, cW)) { ensure(10); pdf.text(ln, M, y); y += 10; }
   if (meta.attributions?.length) {
+    y += 3;
     pdf.setFont('helvetica', 'normal');
-    pdf.text(pdf.splitTextToSize(meta.attributions.join(' '), cW), M, fy + 18);
+    for (const ln of pdf.splitTextToSize(meta.attributions.join(' '), cW)) { ensure(10); pdf.text(ln, M, y); y += 10; }
+  }
+
+  // — Running header (pages 2+) and footer with page numbers (all pages) —
+  const pageCount = pdf.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    pdf.setPage(i);
+    if (i > 1) {
+      pdf.setFont('helvetica', 'normal').setFontSize(7.5).setTextColor(...RGB.muted);
+      pdf.text('Energy Market Report' + (inputs.companyName ? ` — ${inputs.companyName}` : ''), M, 30);
+      pdf.text(dateStr(), W - M, 30, { align: 'right' });
+      pdf.setDrawColor(...RGB.line).setLineWidth(0.5).line(M, 36, W - M, 36);
+    }
+    pdf.setDrawColor(...RGB.line).setLineWidth(0.5).line(M, H - 36, W - M, H - 36);
+    pdf.setFont('helvetica', 'normal').setFontSize(7.5).setTextColor(...RGB.muted);
+    pdf.text('Green Shift Energy Consulting — indicative information only, not financial advice', M, H - 24);
+    pdf.text(`Page ${i} of ${pageCount}`, W - M, H - 24, { align: 'right' });
   }
 
   return { blob: pdf.output('blob'), filename: `${fileBase(inputs)}.pdf` };
@@ -352,8 +387,38 @@ function docHeadingNode(node: DocNode): Paragraph {
   const text = plainText(node);
   const level = (node.attrs?.level as number) ?? 2;
   return level <= 2
-    ? new Paragraph({ spacing: { before: 240, after: 80 }, children: [new TextRun({ text: text.toUpperCase(), bold: true, color: '318300', size: 22 })] })
+    ? new Paragraph({
+        spacing: { before: 240, after: 100 },
+        border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6', space: 3 } },
+        children: [new TextRun({ text: text.toUpperCase(), bold: true, color: '318300', size: 22 })],
+      })
     : new Paragraph({ spacing: { before: 160, after: 60 }, children: [new TextRun({ text, bold: true, color: '2B2A2E', size: 20 })] });
+}
+
+// Client details rendered as a tinted panel (single-cell table with brand fill).
+function docDetailsPanel(rows: [string, string][]): Table {
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [new TableRow({
+      children: [new TableCell({
+        shading: { type: ShadingType.CLEAR, fill: 'F4FAEF' },
+        borders: {
+          top: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6' },
+          bottom: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6' },
+          left: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6' },
+          right: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6' },
+        },
+        margins: { top: 120, bottom: 120, left: 160, right: 160 },
+        children: rows.map(([k, v]) => new Paragraph({
+          spacing: { after: 40 },
+          children: [
+            new TextRun({ text: `${k.toUpperCase()}  `, bold: true, size: 14, color: '318300' }),
+            new TextRun({ text: v, size: 19, color: '2B2A2E' }),
+          ],
+        })),
+      })],
+    })],
+  });
 }
 
 function docList(node: DocNode, ordered: boolean): Paragraph[] {
@@ -388,11 +453,26 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
     const h = Math.round((logo.h / logo.w) * w) || 40;
     children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: dataUrlToBytes(logo.dataUrl), transformation: { width: w, height: h } })] }));
   }
-  children.push(new Paragraph({ spacing: { before: 120 }, children: [new TextRun({ text: 'Energy Market Report', bold: true, size: 34, color: '2B2A2E' })] }));
-  children.push(new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: `Prepared for ${inputs.companyName || inputs.clientName || 'your business'}`, color: '6B6A70', size: 20 })] }));
-  for (const [k, v] of detailRows(inputs)) {
-    if (!v) continue;
-    children.push(new Paragraph({ spacing: { after: 20 }, children: [new TextRun({ text: `${k}: `, bold: true, size: 18, color: '6B6A70' }), new TextRun({ text: v, size: 18 })] }));
+  children.push(new Paragraph({
+    spacing: { before: 160, after: 40 },
+    children: [new TextRun({ text: 'MARKET & PROCUREMENT REPORT', bold: true, size: 16, color: '40A800' })],
+  }));
+  children.push(new Paragraph({
+    border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: '40A800', space: 6 } },
+    spacing: { after: 80 },
+    children: [new TextRun({ text: 'Energy Market Report', bold: true, size: 40, color: '2B2A2E' })],
+  }));
+  children.push(new Paragraph({
+    spacing: { after: 200 },
+    children: [
+      new TextRun({ text: `Prepared for ${inputs.companyName || inputs.clientName || 'your business'}`, color: '6B6A70', size: 21 }),
+      new TextRun({ text: `  ·  ${dateStr()}`, color: '6B6A70', size: 21 }),
+    ],
+  }));
+  const details = detailRows(inputs).filter(([, v]) => v) as [string, string][];
+  if (details.length) {
+    children.push(docDetailsPanel(details));
+    children.push(new Paragraph({ spacing: { after: 120 }, children: [] }));
   }
 
   for (const node of nodes(doc)) {
@@ -447,6 +527,17 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
     children.push(new Paragraph({ children: [new TextRun({ text: meta.attributions.join(' '), size: 14, color: '6B6A70' })] }));
   }
 
+  const runningFooter = () => new Footer({
+    children: [new Paragraph({
+      border: { top: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6', space: 4 } },
+      tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
+      children: [
+        new TextRun({ text: 'Green Shift Energy Consulting — indicative information only, not financial advice', size: 14, color: '6B6A70' }),
+        new TextRun({ children: ['\t', 'Page ', PageNumber.CURRENT, ' of ', PageNumber.TOTAL_PAGES], size: 14, color: '6B6A70' }),
+      ],
+    })],
+  });
+
   const documentDoc = new Document({
     creator: 'Green Shift Energy — Comms',
     title: 'Energy Market Report',
@@ -456,7 +547,25 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
         levels: [{ level: 0, format: LevelFormat.DECIMAL, text: '%1.', alignment: AlignmentType.LEFT }],
       }],
     },
-    sections: [{ children }],
+    sections: [{
+      properties: { titlePage: true },
+      headers: {
+        // The cover carries the logo itself; the running header starts on page 2.
+        first: new Header({ children: [] }),
+        default: new Header({
+          children: [new Paragraph({
+            border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6', space: 4 } },
+            tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
+            children: [
+              new TextRun({ text: `Energy Market Report${inputs.companyName ? ` — ${inputs.companyName}` : ''}`, size: 14, color: '6B6A70' }),
+              new TextRun({ children: ['\t', dateStr()], size: 14, color: '6B6A70' }),
+            ],
+          })],
+        }),
+      },
+      footers: { first: runningFooter(), default: runningFooter() },
+      children,
+    }],
   });
   return { blob: await Packer.toBlob(documentDoc), filename: `${fileBase(inputs)}.docx` };
 }
