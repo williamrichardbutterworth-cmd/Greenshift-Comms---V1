@@ -6,7 +6,7 @@ const TABS: { id: Tab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'brief', label: 'Daily Brief', icon: Sparkles },
   { id: 'news', label: 'News', icon: Newspaper },
-  { id: 'report', label: 'Documents', icon: FileText },
+  { id: 'report', label: 'Clients', icon: FileText },
   { id: 'ideas', label: 'Admin Ideas', icon: Lightbulb },
 ];
 

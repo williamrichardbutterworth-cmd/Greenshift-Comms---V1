@@ -165,10 +165,16 @@ export function ClientHub({
             </div>
           </div>
           <div className="flex gap-2">
-            <button className="btn-ghost !py-1.5" onClick={() => onStartDocument(client)}><FilePlus2 size={15} /> New document</button>
-            <button className="btn-primary !py-1.5" onClick={() => onStartDocument(client, next?.templateId || undefined)} title={next?.action || 'Create the recommended document'}>
-              <Wand2 size={15} /> {next?.templateId ? 'Do next step' : 'New document'}
-            </button>
+            {next?.templateId ? (
+              <>
+                <button className="btn-ghost !py-1.5" onClick={() => onStartDocument(client)}><FilePlus2 size={15} /> New document</button>
+                <button className="btn-primary !py-1.5" onClick={() => onStartDocument(client, next.templateId)} title={next.action || 'Create the recommended document'}>
+                  <Wand2 size={15} /> Do next step
+                </button>
+              </>
+            ) : (
+              <button className="btn-primary !py-1.5" onClick={() => onStartDocument(client)}><FilePlus2 size={15} /> New document</button>
+            )}
           </div>
         </div>
 
@@ -247,7 +253,7 @@ export function ClientHub({
             </div>
             <div className="flex gap-2 mb-2">
               {(['transcript', 'email', 'bill'] as SourceKind[]).map((k) => (
-                <button key={k} onClick={() => setIntakeKind(k)} className={'text-xs px-2.5 py-1 rounded-lg border capitalize transition ' + (intakeKind === k ? 'border-brand-green bg-brand-tint text-brand-ink font-medium' : 'border-brand-line text-brand-muted hover:text-brand-ink')}>{k}</button>
+                <button key={k} onClick={() => setIntakeKind(k)} aria-pressed={intakeKind === k} className={'text-xs px-2.5 py-1 rounded-lg border capitalize transition ' + (intakeKind === k ? 'border-brand-green bg-brand-tint text-brand-ink font-medium' : 'border-brand-line text-brand-muted hover:text-brand-ink')}>{k}</button>
               ))}
             </div>
             <textarea className="input min-h-[90px] text-sm" placeholder="Paste the transcript / email / bill text here…" value={intakeText} onChange={(e) => setIntakeText(e.target.value)} />

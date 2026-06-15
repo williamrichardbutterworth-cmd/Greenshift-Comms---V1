@@ -17,6 +17,7 @@ import type { DocumentTemplate } from '../lib/api';
 import { CollapsibleSection } from './CollapsibleSection';
 import { ReportHome } from './ReportHome';
 import { ClientHub } from './ClientHub';
+import { ClientCreate } from './ClientCreate';
 import { buildDocFromSections } from '../lib/buildDocFromSections';
 
 const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] = [
@@ -80,6 +81,7 @@ export function ReportGenerator() {
   const [pickProfileId, setPickProfileId] = useState<string | undefined>(undefined);
   // CRM: the open client hub (overview → client hub → studio).
   const [activeClientId, setActiveClientId] = useState<string | null>(null);
+  const [creatingClient, setCreatingClient] = useState(false);
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [refUrl, setRefUrl] = useState('');
@@ -410,6 +412,7 @@ export function ReportGenerator() {
       <>
         {picking && <DocumentTypePicker onPick={onTemplatePicked} onCancel={() => setPicking(false)} />}
         {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} onDone={onProfileDone} onCancel={cancelCreate} />}
+        {creatingClient && <ClientCreate onCreated={(c) => { setCreatingClient(false); refreshProjects(); setActiveClientId(c.id); }} onCancel={() => setCreatingClient(false)} />}
         {activeClientId ? (
           <ClientHub
             clientId={activeClientId}
@@ -422,6 +425,7 @@ export function ReportGenerator() {
             projects={projects}
             onOpen={openProject}
             onNew={() => startNew()}
+            onNewClient={() => setCreatingClient(true)}
             onNewForClient={(profileId) => startNew(profileId)}
             onOpenClient={(id) => setActiveClientId(id)}
             onRefresh={refreshProjects}
