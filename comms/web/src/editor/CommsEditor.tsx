@@ -7,7 +7,7 @@ import Image from '@tiptap/extension-image';
 import {
   Bold, Italic, Heading2, Heading3, List, ListOrdered, Quote, Link2,
   Table2, LineChart as LineChartIcon, BarChart3, Newspaper, Plus,
-  Sparkles, ChevronDown, Loader2, Map as MapIcon,
+  Sparkles, ChevronDown, Loader2, Map as MapIcon, TrendingDown,
 } from 'lucide-react';
 import { api, type ReportDoc, type EditAction } from '../lib/api';
 import { MetricsTable, metricToRow } from './nodes/MetricsTable';
@@ -15,6 +15,7 @@ import { PriceChart, defaultChart } from './nodes/PriceChart';
 import { NewsList } from './nodes/NewsList';
 import { CustomChart, defaultCustomChart } from './nodes/CustomChart';
 import { GridMap, defaultGridMap } from './nodes/GridMap';
+import { ForwardCurve, defaultForwardCurve } from './nodes/ForwardCurve';
 
 const A4_PAGE_H = 1122; // A4 @96dpi (matches .report-sheet in index.css)
 const heading2 = (text: string) => ({ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text }] });
@@ -37,6 +38,7 @@ export const editorExtensions = [
   NewsList,
   CustomChart,
   GridMap,
+  ForwardCurve,
 ];
 
 function ToolbarButton({
@@ -158,6 +160,7 @@ export function CommsEditor({
   const addCustomChart = () => addHeadingAndNode({ type: 'customChart', attrs: { data: defaultCustomChart() } }, 'Custom analysis');
   const addNews = () => addHeadingAndNode({ type: 'newsList', attrs: { items: [] } }, 'Supporting evidence');
   const addGridMap = () => addHeadingAndNode({ type: 'gridMap', attrs: defaultGridMap() }, 'Generation map');
+  const addForwardCurve = () => addHeadingAndNode({ type: 'forwardCurve', attrs: defaultForwardCurve() }, 'Procurement timing');
 
   const setLink = () => {
     const prev = (editor.getAttributes('link').href as string) ?? '';
@@ -226,6 +229,7 @@ export function CommsEditor({
         <span className="flex-1" />
         <span className="label hidden sm:inline mr-1">Insert</span>
         <ToolbarButton title="Market metrics" onClick={addMetrics}><Table2 size={15} /></ToolbarButton>
+        <ToolbarButton title="Forward curve & procurement timing" onClick={addForwardCurve}><TrendingDown size={15} /></ToolbarButton>
         <ToolbarButton title="Price chart" onClick={addPriceChart}><LineChartIcon size={15} /></ToolbarButton>
         <ToolbarButton title="Custom chart" onClick={addCustomChart}><BarChart3 size={15} /></ToolbarButton>
         <ToolbarButton title="Generation map" onClick={addGridMap}><MapIcon size={15} /></ToolbarButton>

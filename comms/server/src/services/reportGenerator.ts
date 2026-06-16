@@ -3,10 +3,11 @@ import { aiConfigured } from '../config';
 import { getMarketSnapshot } from '../providers/marketData';
 import {
   reportNarrativePrompt, reportAssemblePrompt, reportEditPrompt, transcriptExtractPrompt,
-  sourceAnalysisPrompt, nextStepPrompt,
+  sourceAnalysisPrompt, nextStepPrompt, forwardCurveExtractPrompt,
   type ReportInputs, type AssembleContext, type EditAction, type SourceKind,
   type RecommendClient, type RecommendTemplate,
 } from './prompts';
+import { coerceCurves, type CommodityCurve } from './forwardCurveStore';
 import { getTemplate, type DocumentTemplate } from './templatesStore';
 import type { NewsItem } from '../providers/news/types';
 import type { MarketSnapshot } from '../providers/marketData/types';
@@ -60,6 +61,7 @@ export interface SectionSpec {
 const VALID_REF = (ref: string, ctx: AssembleContext): boolean =>
   ref === 'marketSnapshot' ||
   ref === 'generationMap' ||
+  ref === 'forwardCurve' ||
   ref === 'selectedNews' ||
   /^chart:(brent|gas|power):(3m|6m|12m)$/.test(ref) ||
   (ctx.customCharts ?? []).some((c) => ref === `customChart:${c.id}`);
@@ -203,6 +205,35 @@ export async function analyzeSource(text: string, kind: SourceKind, currentInput
       summary: typeof res.summary === 'string' ? res.summary.slice(0, 400) : '',
       points, suggestedMilestones, provider: ai.name,
     };
+  } catch (e) {
+    return { ...empty, provider: 'error', error: (e as Error).message };
+  }
+}
+
+// ── Forward curve: extract the power + gas season tables from a pasted/uploaded
+// morning market report (text and/or screenshot image). Never throws. ──
+export interface ForwardCurveExtract {
+  asOfDate: string;
+  source: string;
+  curves: CommodityCurve[];
+  provider: string;
+  error?: string;
+}
+
+export async function extractForwardCurve(input: { text?: string; image?: { base64: string; mime: string } }): Promise<ForwardCurveExtract> {
+  const empty: ForwardCurveExtract = { asOfDate: '', source: '', curves: [], provider: 'none' };
+  if (!input.text?.trim() && !input.image) return empty;
+  if (!aiConfigured()) return { ...empty, error: 'Automatic extraction isn’t configured.' };
+  try {
+    const ai = getAI();
+    const { system, prompt } = forwardCurveExtractPrompt(input.text);
+    const res = await ai.generateJSON<{ asOfDate?: unknown; source?: unknown; curves?: unknown }>({
+      system, prompt, maxTokens: 2200, images: input.image ? [input.image] : undefined,
+    });
+    const curves = coerceCurves(res.curves);
+    if (!curves.length) return { ...empty, provider: ai.name, error: 'No forward-price tables were found in what you provided.' };
+    const asOf = typeof res.asOfDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(res.asOfDate.trim()) ? res.asOfDate.trim() : '';
+    return { asOfDate: asOf, source: typeof res.source === 'string' ? res.source.trim().slice(0, 120) : '', curves, provider: ai.name };
   } catch (e) {
     return { ...empty, provider: 'error', error: (e as Error).message };
   }

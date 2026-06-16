@@ -61,6 +61,7 @@ function chartNode(series: SeriesKey, range: RangeKey): DocNode {
 function embedNode(ref: string, ctx: BuildContext): DocNode | null {
   if (ref === 'marketSnapshot') return ctx.snapshot ? metricsNode(ctx.snapshot) : null;
   if (ref === 'generationMap') return { type: 'gridMap', attrs: { snapshot: null, mode: 'intensity' } };
+  if (ref === 'forwardCurve') return { type: 'forwardCurve', attrs: { snapshot: null } };
   if (ref === 'selectedNews') return ctx.selectedNews?.length ? { type: 'newsList', attrs: { items: ctx.selectedNews } } : null;
   if (ref.startsWith('chart:')) {
     const [, series, range] = ref.split(':');

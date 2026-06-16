@@ -124,6 +124,7 @@ function refList(ctx: AssembleContext): string[] {
   if (ctx.includeSnapshot) refs.push('"marketSnapshot" — the live market metrics table');
   refs.push('"chart:brent:12m" — a price-trend chart (series may be brent|gas|power; range may be 3m|6m|12m)');
   refs.push('"generationMap" — a UK map of regional grid carbon intensity + live interconnector flows (use at most once, where grid/sustainability context helps)');
+  refs.push('"forwardCurve" — the UK power baseload + NBP gas forward season curves with the backwardation / "procure now vs wait" read (use where procurement timing is the point)');
   if (ctx.selectedNews?.length) refs.push('"selectedNews" — the attached news headlines, as a bulleted list');
   (ctx.customCharts ?? []).forEach((c) => refs.push(`"customChart:${c.id}" — the agent's own chart titled "${c.title}"`));
   return refs;
@@ -314,6 +315,36 @@ Return ONLY JSON in exactly this shape:
   "suggestedMilestones": ["zero or more of: billReceived, loaSent, loaReturned, quotesGathered, proposalSent, signed — ONLY if the source clearly evidences that milestone (e.g. an attached/described bill -> billReceived; a signed LOA -> loaReturned)"]
 }
 Leave any profile field as an empty string if not clearly stated. For 'consumption' include units (e.g. "450,000 kWh/yr"). Provide 0-8 points. Plain UK English.`,
+  };
+}
+
+// ── Forward curve: extract the UK power baseload + NBP gas season tables from a
+// pasted/screenshotted morning market report (e.g. TotalEnergies / Energy
+// Market Price). Works on attached image(s) and/or pasted text. ──
+export function forwardCurveExtractPrompt(text?: string) {
+  const hasText = !!text && text.trim().length > 0;
+  return {
+    system: `You read UK wholesale energy market reports and return their forward-price tables as structured data. Extract ONLY values clearly present in the source — never invent, infer or fill gaps. Numbers must be copied exactly as shown (no rounding). UK English.`,
+    prompt: `From the ${hasText ? 'text below' : 'attached image(s)'}${hasText ? '' : ' of a daily market report'}, extract the two UK forward-price tables:
+- UK power baseload prices (unit "£/MWh")
+- UK NBP gas prices (unit "p/therm")
+
+Each table lists contracts by row. The columns are typically: Contract, a recent settlement date, the previous settlement date, a "Change" column (IGNORE — it is derived), a "Current Offer/Price (*)" column, and another "Change" column (IGNORE). Map them to:
+- "label": the contract name exactly as written (e.g. "DA", "Jul-26", "Aug-26", "Q3-26", "Q4-26", "Win 26", "Sum 27", "Win 27", "Sum 28", "Win 28")
+- "latest": the most recent settlement price (the left-most dated price column)
+- "prev": the previous settlement price (the next dated price column)
+- "current": the "Current Offer" / "Current price" value (the column marked with "(*)")
+${hasText ? `\nSource:\n"""\n${text.slice(0, 16000)}\n"""\n` : ''}
+Return ONLY JSON in exactly this shape:
+{
+  "asOfDate": "YYYY-MM-DD — the most recent settlement date (the left-most dated column header), or the report's 'Last Update' date; empty string if not shown",
+  "source": "the report's publisher if visible (e.g. 'TotalEnergies — Energy Market Price'), else ''",
+  "curves": [
+    { "commodity": "power", "unit": "£/MWh", "legs": [ { "label": "DA", "latest": 104.40, "prev": 97.50, "current": 114 } ] },
+    { "commodity": "gas", "unit": "p/therm", "legs": [ { "label": "DA", "latest": 121.60, "prev": 118.50, "current": 122.00 } ] }
+  ]
+}
+Use numbers (not strings) for prices; use null for any price genuinely absent. Include every contract row you can see, in the order shown. Only include a "power" and/or "gas" curve if that table is actually present.`,
   };
 }
 

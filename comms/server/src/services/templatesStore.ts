@@ -78,6 +78,21 @@ const seedTemplates = (): DocumentTemplate[] => {
       ],
     }),
     mk({
+      id: 'builtin-procure-ahead',
+      name: 'Procure-ahead recommendation',
+      description: 'Proves, with the forward curve, that securing energy ahead is cheaper than waiting — built around the backwardation read.',
+      channel: 'document',
+      icon: 'TrendingDown',
+      guidance: 'A concise, evidence-led report showing this client that buying their energy forward now is cheaper and lower-risk than waiting, using the UK power baseload + NBP gas forward curves. Confident and specific, but honest about risk. Anchor the argument in the forward-curve figures and their contract timing.',
+      sections: [
+        { kind: 'text', heading: 'The opportunity', guidance: 'In two or three sentences: why procurement timing matters for this client right now, given their contract end and consumption.' },
+        { kind: 'text', heading: 'What the forward market is telling us', guidance: 'Explain, in plain English, that the forward curve is in backwardation — later delivery is cheaper than the front — so fixing ahead locks in lower prices. Do not restate every figure; the curve block below shows them.' },
+        { kind: 'embed', heading: 'UK forward curve', ref: 'forwardCurve' },
+        { kind: 'text', heading: 'Our recommendation', guidance: 'A clear fix-ahead recommendation tailored to this client’s contract end and risk appetite, with the headline saving versus waiting, and an honest note on risk.' },
+        { kind: 'text', heading: 'Next steps', guidance: 'What happens next and how Green Shift will help them secure it (e.g. LOA, gather quotes).' },
+      ],
+    }),
+    mk({
       id: 'builtin-renewal-recommendation',
       name: 'Contract renewal recommendation',
       description: 'A focused fix-or-wait recommendation driven by the client’s contract end date and the current market.',
@@ -96,7 +111,7 @@ const seedTemplates = (): DocumentTemplate[] => {
 };
 
 // ── Validation / coercion of a (possibly user-supplied) template ──
-const VALID_REF = /^(marketSnapshot|generationMap|selectedNews|chart:(brent|gas|power):(3m|6m|12m)|customChart:.+)$/;
+const VALID_REF = /^(marketSnapshot|generationMap|forwardCurve|selectedNews|chart:(brent|gas|power):(3m|6m|12m)|customChart:.+)$/;
 
 function coerceSections(raw: unknown): TemplateSection[] {
   if (!Array.isArray(raw)) return [];
@@ -152,28 +167,41 @@ async function filePersist(rows: DocumentTemplate[]): Promise<void> {
   await writeFile(tmp, JSON.stringify(rows, null, 2), 'utf8');
   await rename(tmp, FILE);
 }
+// Backfill any built-in templates added in a later release that an existing
+// store doesn't have yet (keyed by their fixed builtin-* ids).
+function mergeBuiltins(rows: DocumentTemplate[]): DocumentTemplate[] {
+  const have = new Set(rows.map((t) => t.id));
+  const missing = seedTemplates().filter((t) => !have.has(t.id));
+  return missing.length ? [...rows, ...missing] : rows;
+}
+
 async function fileLoad(): Promise<DocumentTemplate[]> {
   if (fileCache) return fileCache;
+  let rows: DocumentTemplate[];
   try {
     const parsed = JSON.parse(await readFile(FILE, 'utf8'));
-    fileCache = Array.isArray(parsed) && parsed.length ? (parsed as DocumentTemplate[]) : seedTemplates();
+    rows = Array.isArray(parsed) && parsed.length ? (parsed as DocumentTemplate[]) : seedTemplates();
   } catch {
-    fileCache = seedTemplates();
+    rows = seedTemplates();
   }
-  if (fileCache && fileCache.length) await filePersist(fileCache).catch(() => {});
-  return fileCache!;
+  fileCache = mergeBuiltins(rows);
+  if (fileCache.length) await filePersist(fileCache).catch(() => {});
+  return fileCache;
 }
 
 async function ensureSeeded(sb: ReturnType<typeof getSupabase>): Promise<void> {
   if (!sb) return;
-  const { data, error } = await sb.from('document_templates').select('id').limit(1);
+  // Insert any builtin that isn't present yet — seeds an empty table AND
+  // backfills builtins added in a later release. Idempotent: upsert/ignore on
+  // the fixed builtin-* ids avoids a duplicate-key 500 under a cold-start race.
+  const { data, error } = await sb.from('document_templates').select('id');
   if (error) throw new Error(error.message);
-  if (!data?.length) {
-    // Idempotent: two cold-start requests can both see an empty table and race
-    // to seed the fixed builtin-* ids — upsert/ignore avoids a duplicate-key 500.
+  const have = new Set((data ?? []).map((r) => (r as { id: string }).id));
+  const missing = seedTemplates().filter((t) => !have.has(t.id));
+  if (missing.length) {
     const { error: insErr } = await sb
       .from('document_templates')
-      .upsert(seedTemplates().map(templateToRow), { onConflict: 'id', ignoreDuplicates: true });
+      .upsert(missing.map(templateToRow), { onConflict: 'id', ignoreDuplicates: true });
     if (insErr) throw new Error(insErr.message);
   }
 }

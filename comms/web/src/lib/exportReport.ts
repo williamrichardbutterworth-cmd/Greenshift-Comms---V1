@@ -7,8 +7,9 @@ import {
 } from 'docx';
 import { renderLineChartSVG, type ChartOptions } from './chartSvg';
 import { renderGridMapSVG, gridMapHeight } from './gridMapSvg';
+import { analyzeCurve, procurementNarrative, forwardCurveChartOptions, commodityLabel, legValue } from './forwardCurve';
 import { inlineRuns, plainText, hasMarks, pdfFontStyle, inlineToDocx } from './serializeDoc';
-import type { ReportDoc, DocNode, ReportInputs, ReportMeta, MetricRow, ChartData, NewsRef, CustomChartData, GridSnapshot } from './api';
+import type { ReportDoc, DocNode, ReportInputs, ReportMeta, MetricRow, ChartData, NewsRef, CustomChartData, GridSnapshot, ForwardCurveSnapshot, CommodityCurve, CurveLeg } from './api';
 
 // Branded client-side report export — no server, no Puppeteer. Walks the TipTap
 // document (headings, rich paragraphs, lists, quotes + the embedded metrics /
@@ -112,7 +113,7 @@ function exportNodes(doc: ReportDoc): DocNode[] {
   const out: DocNode[] = [];
   for (let i = 0; i < ns.length; i++) {
     const n = ns[i];
-    if (n.type === 'gridMap' && !(n.attrs as { snapshot?: unknown } | undefined)?.snapshot) {
+    if ((n.type === 'gridMap' || n.type === 'forwardCurve') && !(n.attrs as { snapshot?: unknown } | undefined)?.snapshot) {
       const prev = ns[i - 1];
       if (prev && prev.type === 'heading' && out[out.length - 1] === prev) out.pop();
       continue;
@@ -336,6 +337,36 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
     }
   };
 
+  const pdfForwardCurve = async (snap: ForwardCurveSnapshot | null) => {
+    if (!snap?.curves?.length) return;
+    for (const curve of snap.curves) {
+      const a = analyzeCurve(curve);
+      ensure(14);
+      pdf.setFont('helvetica', 'bold').setFontSize(11).setTextColor(...RGB.ink).text(`${commodityLabel(curve.commodity)} (${curve.unit})`, M, y); y += 14;
+      if (a) {
+        pdf.setFont('helvetica', 'normal').setFontSize(10).setTextColor(...RGB.ink);
+        for (const ln of pdf.splitTextToSize(procurementNarrative(curve, a), cW)) { ensure(lineH); pdf.text(ln, M, y); y += lineH; }
+        y += 3;
+      }
+      await pdfChartImage(forwardCurveChartOptions(curve, { width: 760, height: 300 }));
+      autoTable(pdf, {
+        startY: y,
+        margin: { left: M, right: M },
+        head: [['Contract', 'Latest', 'Current']],
+        body: curve.legs.map((l) => [l.label, l.latest ?? '—', l.current ?? legValue(l) ?? '—']),
+        theme: 'grid',
+        styles: { fontSize: 8.5, cellPadding: 3, lineColor: RGB.line, textColor: RGB.ink },
+        headStyles: { fillColor: [244, 250, 239], textColor: RGB.greenDark, fontStyle: 'bold' },
+        columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
+        didParseCell: (d) => { if (d.section === 'body' && a && a.hasForwardValue && curve.legs[d.row.index] === a.cheapest) d.cell.styles.textColor = RGB.down; },
+      });
+      y = (pdf as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+    }
+    pdf.setFont('helvetica', 'italic').setFontSize(8).setTextColor(...RGB.muted);
+    const cap = `${snap.source} · report ${new Date(snap.asOfDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}. Indicative market levels, for information only.`;
+    for (const ln of pdf.splitTextToSize(cap, cW)) { ensure(11); pdf.text(ln, M, y); y += 11; }
+  };
+
   const pdfImage = async (node: DocNode) => {
     const src = node.attrs?.src as string | undefined;
     if (!src) return;
@@ -364,6 +395,7 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
       }
       case 'newsList': pdfNews((node.attrs?.items as NewsRef[]) ?? []); break;
       case 'gridMap': await pdfGridMap(node.attrs?.snapshot as GridSnapshot | null, (node.attrs?.mode as 'intensity' | 'fuel') ?? 'intensity'); break;
+      case 'forwardCurve': await pdfForwardCurve(node.attrs?.snapshot as ForwardCurveSnapshot | null); break;
       case 'image': await pdfImage(node); break;
       default: if (node.content?.length) pdfParagraph(node);
     }
@@ -426,6 +458,41 @@ function docMetricsTable(rows: MetricRow[]): Table {
       ],
     })),
   });
+}
+
+// Forward-curve season table for the Word export — Contract / Latest / Current,
+// with the cheapest forward term highlighted green.
+function docForwardCurveTable(curve: CommodityCurve, cheapest: CurveLeg | null): Table {
+  const cell = (text: string, align?: (typeof AlignmentType)[keyof typeof AlignmentType], color?: string, bold?: boolean) =>
+    new TableCell({
+      borders: {
+        top: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+        left: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+        right: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+        bottom: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6' },
+      },
+      margins: { top: 30, bottom: 30, left: 60, right: 60 },
+      children: [new Paragraph({ alignment: align, children: [new TextRun({ text, color, bold, size: 18 })] })],
+    });
+  const head = new TableRow({
+    children: [
+      cell('Contract', AlignmentType.LEFT, '318300', true),
+      cell('Latest', AlignmentType.RIGHT, '318300', true),
+      cell('Current', AlignmentType.RIGHT, '318300', true),
+    ],
+  });
+  const rows = curve.legs.map((l) => {
+    const hot = l === cheapest;
+    const color = hot ? '2E7D32' : undefined;
+    return new TableRow({
+      children: [
+        cell(l.label, AlignmentType.LEFT, color, hot),
+        cell(l.latest == null ? '—' : String(l.latest), AlignmentType.RIGHT, color),
+        cell(l.current == null ? (l.latest == null ? '—' : String(l.latest)) : String(l.current), AlignmentType.RIGHT, color),
+      ],
+    });
+  });
+  return new Table({ width: { size: 70, type: WidthType.PERCENTAGE }, rows: [head, ...rows] });
 }
 
 function docHeadingNode(node: DocNode): Paragraph {
@@ -561,6 +628,19 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
           children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: w, height: h } })] }));
           children.push(new Paragraph({ spacing: { before: 40 }, children: [new TextRun({ text: gridMapCaption(snap), italics: true, size: 16, color: '6B6A70' })] }));
         }
+        break;
+      }
+      case 'forwardCurve': {
+        const snap = node.attrs?.snapshot as ForwardCurveSnapshot | null;
+        for (const curve of snap?.curves ?? []) {
+          const a = analyzeCurve(curve);
+          children.push(new Paragraph({ spacing: { before: 120, after: 40 }, children: [new TextRun({ text: `${commodityLabel(curve.commodity)} (${curve.unit})`, bold: true, size: 22, color: '2B2A2E' })] }));
+          if (a) children.push(new Paragraph({ spacing: { after: 80 }, children: [new TextRun({ text: procurementNarrative(curve, a), size: 20 })] }));
+          const png = dataUrlToBytes(await svgToPngDataUrl(renderLineChartSVG(forwardCurveChartOptions(curve, { width: 760, height: 300 })), 760, 300));
+          children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: 600, height: 237 } })] }));
+          children.push(docForwardCurveTable(curve, a && a.hasForwardValue ? a.cheapest : null));
+        }
+        if (snap) children.push(new Paragraph({ spacing: { before: 40 }, children: [new TextRun({ text: `${snap.source} · report ${new Date(snap.asOfDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}. Indicative market levels, for information only.`, italics: true, size: 16, color: '6B6A70' })] }));
         break;
       }
       case 'image': {

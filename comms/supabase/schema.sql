@@ -150,3 +150,17 @@ create table if not exists public.document_templates (
 );
 create index if not exists document_templates_created_idx on public.document_templates (created_at desc);
 alter table public.document_templates enable row level security;
+
+-- Forward-curve snapshots — the daily UK power baseload + NBP gas season tables
+-- from the morning market report (operator pastes/uploads it, AI extracts it).
+-- `curves` is [{ commodity, unit, legs:[{label,latest,prev,current}] }].
+create table if not exists public.forward_curves (
+  id          text        primary key default gen_random_uuid()::text,
+  as_of_date  date,
+  source      text        not null default 'Market report',
+  note        text,
+  curves      jsonb       not null default '[]'::jsonb,
+  created_at  timestamptz not null default now()
+);
+create index if not exists forward_curves_asof_idx on public.forward_curves (as_of_date desc, created_at desc);
+alter table public.forward_curves enable row level security;

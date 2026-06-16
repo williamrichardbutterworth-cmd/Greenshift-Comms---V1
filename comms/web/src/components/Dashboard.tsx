@@ -5,6 +5,7 @@ import { api, type MarketSnapshot, type Metric } from '../lib/api';
 import { MetricCard } from './MetricCard';
 import { PriceExplorer } from './PriceExplorer';
 import { GenerationMap } from './GenerationMap';
+import { ForwardCurvePanel } from './ForwardCurvePanel';
 
 // Metric groups (by label keyword). Each becomes a customizable widget.
 const GROUPS: { key: string; title: string; match: (label: string) => boolean }[] = [
@@ -45,6 +46,7 @@ const FUEL_COLORS = ['#40A800', '#318300', '#73C13B', '#9BD46A', '#2B2A2E', '#6B
 // ── Customizable layout, persisted to localStorage (no auth needed) ──
 const LS_KEY = 'comms.dashboard.layout.v2';
 const WIDGETS: { id: string; title: string }[] = [
+  { id: 'forward-curve', title: 'Forward curve & procurement timing' },
   { id: 'price-history', title: 'Price history' },
   { id: 'generation-map', title: 'Generation map' },
   { id: 'metrics-gas', title: 'Gas metrics' },
@@ -66,7 +68,9 @@ function loadLayout(): Layout {
       // Merge with the registry so widgets added in a later release still appear.
       const known = new Set(DEFAULT_ORDER);
       const order = [...(p.order ?? []).filter((id) => known.has(id))];
-      for (const id of DEFAULT_ORDER) if (!order.includes(id)) order.push(id);
+      // Surface widgets added in a later release without wiping the saved layout.
+      // The flagship forward-curve widget leads; others append at the end.
+      for (const id of DEFAULT_ORDER) if (!order.includes(id)) { if (id === 'forward-curve') order.unshift(id); else order.push(id); }
       return { order, hidden: (p.hidden ?? []).filter((id) => known.has(id)) };
     }
   } catch { /* fall through to default */ }
@@ -118,6 +122,7 @@ export function Dashboard() {
 
   const renderWidget = (id: string): ReactNode => {
     switch (id) {
+      case 'forward-curve': return <ForwardCurvePanel />;
       case 'price-history': return <PriceExplorer />;
       case 'generation-map': return <GenerationMap />;
       case 'metrics-gas': return metricsGroup('gas', 'Gas');

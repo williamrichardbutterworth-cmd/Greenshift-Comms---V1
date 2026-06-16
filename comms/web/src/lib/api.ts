@@ -278,6 +278,47 @@ export interface NewIdea {
 export interface IdeasMeta { categories: string[]; statuses: IdeaStatus[]; }
 export interface IdeasSummary { configured: boolean; provider?: string; summary: string; }
 
+// ── Forward curve (procurement timing): UK power baseload + NBP gas season tables
+// captured daily from the morning market report. ──
+export type Commodity = 'power' | 'gas';
+export interface CurveLeg {
+  label: string;
+  latest: number | null;
+  prev: number | null;
+  current: number | null;
+}
+export interface CommodityCurve {
+  commodity: Commodity;
+  unit: string;
+  legs: CurveLeg[];
+}
+export interface ForwardCurveSnapshot {
+  id: string;
+  asOfDate: string;
+  source: string;
+  note?: string;
+  curves: CommodityCurve[];
+  createdAt: string;
+}
+export interface NewForwardCurve {
+  asOfDate?: string;
+  source?: string;
+  note?: string;
+  curves: CommodityCurve[];
+}
+export interface ForwardCurveExtract {
+  asOfDate: string;
+  source: string;
+  curves: CommodityCurve[];
+  provider: string;
+  error?: string;
+}
+export interface ForwardTrend {
+  commodity: Commodity;
+  unit: string;
+  points: { t: string; v: number }[];
+}
+
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
   if (!r.ok) throw new Error((await r.text()) || `Request failed: ${r.status}`);
@@ -373,6 +414,17 @@ export const api = {
     upload: (input: NewFileUpload) => j<ClientFile>('/api/report/files', postJson(input)),
     remove: (id: string) => j<{ ok: boolean }>(`/api/report/files/${id}`, { method: 'DELETE' }),
     downloadUrl: (id: string) => `/api/report/files/${id}/download`,
+  },
+
+  // Forward-curve (procurement-timing) snapshots from the morning market report.
+  forwardCurve: {
+    latest: () => j<ForwardCurveSnapshot | null>('/api/forward-curve/latest'),
+    list: () => j<ForwardCurveSnapshot[]>('/api/forward-curve'),
+    trend: (commodity: Commodity) => j<ForwardTrend>(`/api/forward-curve/trend?commodity=${commodity}`),
+    extract: (input: { text?: string; image?: { base64: string; mime: string } }) =>
+      j<ForwardCurveExtract>('/api/forward-curve/extract', postJson(input)),
+    save: (input: NewForwardCurve) => j<ForwardCurveSnapshot>('/api/forward-curve', postJson(input)),
+    remove: (id: string) => j<{ ok: boolean }>(`/api/forward-curve/${id}`, { method: 'DELETE' }),
   },
 
   // Mine a pasted call transcript for client details.
