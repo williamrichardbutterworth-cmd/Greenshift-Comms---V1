@@ -29,7 +29,7 @@
 | `82202a1` | Forward-curve procurement engine — paste/screenshot → vision extract → backwardation read + client report bridge |
 | `d78e59d` | Report engine (dynamic identity, KPI/recommendation/comparison blocks, evidence/disclaimer layer, 4 UK report templates) + revamped client view (stage rail, **talk-track angles**, media bank) + forward curve plots **every** contract |
 | `1de5794` | Document-builder overhaul — insert-at-cursor, grouped **Insert ▾** menu, **Outline ▾** jump-nav, live word/page count, zoom 60–140%, menus hidden on email surface (adversarial-reviewed, 8 findings fixed) |
-| `__HASH__` | Angles/conversations → report — one-click **Draft follow-up** from the talk track (seeds a post-call-followup email with the client's angles) + **Past conversations** tray that grounds any draft in selected timeline entries (summary/points/angles fed as prompt context). Browser-verified end-to-end. **No schema change.** |
+| `c4aef2b` | Angles/conversations → report — one-click **Draft follow-up** from the talk track (seeds a post-call-followup email with the client's angles) + **Past conversations** tray that grounds any draft in selected timeline entries (summary/points/angles fed as prompt context). Browser-verified end-to-end. **No schema change.** |
 
 ---
 
