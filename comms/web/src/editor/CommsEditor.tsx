@@ -8,6 +8,7 @@ import {
   Bold, Italic, Heading2, Heading3, List, ListOrdered, Quote, Link2,
   Table2, LineChart as LineChartIcon, BarChart3, Newspaper, Plus,
   Sparkles, ChevronDown, Loader2, Map as MapIcon, TrendingDown, Gauge, CheckCircle2, Columns3,
+  ListTree, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import { api, type ReportDoc, type EditAction } from '../lib/api';
 import { MetricsTable, metricToRow } from './nodes/MetricsTable';
@@ -89,7 +90,24 @@ export function CommsEditor({
   const [aiAction, setAiAction] = useState<EditAction | null>(null);
   const [aiErr, setAiErr] = useState<string | null>(null);
   const [pages, setPages] = useState(1);
+  const [words, setWords] = useState(0);
+  const [insertOpen, setInsertOpen] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [zoom, setZoom] = useState(1);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+
+  // Close the toolbar dropdowns on an outside click/tap or Escape (mouseleave
+  // alone is unreliable, and absent on touch).
+  useEffect(() => {
+    if (!aiOpen && !insertOpen && !outlineOpen) return;
+    const closeAll = () => { setAiOpen(false); setInsertOpen(false); setOutlineOpen(false); };
+    const onDown = (e: MouseEvent) => { if (toolbarRef.current && !toolbarRef.current.contains(e.target as Node)) closeAll(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeAll(); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [aiOpen, insertOpen, outlineOpen]);
 
   // Latest drop callbacks, read inside the (stable) editorProps.handleDrop.
   const onFilesRef = useRef(onFiles);
@@ -136,21 +154,39 @@ export function CommsEditor({
     if (!editor) return;
     let t: ReturnType<typeof setTimeout> | undefined;
     const sync = () => {
-      const sheet = wrapRef.current?.querySelector('.report-sheet') as HTMLElement | null;
-      const h = Math.max(sheet?.scrollHeight ?? 0, sheet?.offsetHeight ?? 0, A4_PAGE_H);
-      setPages(Math.max(1, Math.ceil(h / A4_PAGE_H)));
+      if (surface !== 'email') {
+        const sheet = wrapRef.current?.querySelector('.report-sheet') as HTMLElement | null;
+        // scrollHeight is reported in the sheet's own (unzoomed) CSS pixels in
+        // modern Chromium, so the page count is correct regardless of zoom.
+        const raw = Math.max(sheet?.scrollHeight ?? 0, sheet?.offsetHeight ?? 0, A4_PAGE_H);
+        setPages(Math.max(1, Math.ceil(raw / A4_PAGE_H)));
+      }
+      const text = editor.state.doc.textContent.trim();
+      setWords(text ? text.split(/\s+/).length : 0);
     };
     const deb = () => { if (t) clearTimeout(t); t = setTimeout(sync, 250); };
-    sync();
+    // Re-run on doc swap (docKey) too — setContent(emitUpdate=false) doesn't fire 'update'.
+    requestAnimationFrame(sync);
     editor.on('update', deb);
     window.addEventListener('resize', deb);
     return () => { editor.off('update', deb); window.removeEventListener('resize', deb); if (t) clearTimeout(t); };
-  }, [editor]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor, docKey, surface]);
 
   if (!editor) return null;
 
+  // Insert blocks just AFTER the current top-level block (at the cursor), not at
+  // the very end of the document — so the builder behaves like a real editor.
+  // Works for a text cursor AND when a block (atom) node is selected.
+  const blockInsertPos = (): number => {
+    const { selection } = editor.state;
+    const { $to } = selection;
+    try { if ($to.depth > 0) return $to.after(1); } catch { /* fall through */ }
+    return selection.to; // NodeSelection / top-level → land right after the selection
+  };
   const addHeadingAndNode = (node: Record<string, unknown>, title: string) => {
-    editor.chain().focus().insertContentAt(editor.state.doc.content.size, [heading2(title), node]).run();
+    setInsertOpen(false);
+    editor.chain().focus().insertContentAt(blockInsertPos(), [heading2(title), node]).run();
   };
   const addMetrics = async () => {
     let rows: ReturnType<typeof metricToRow>[] = [];
@@ -168,8 +204,40 @@ export function CommsEditor({
   const addGridMap = () => addHeadingAndNode({ type: 'gridMap', attrs: defaultGridMap() }, 'Generation map');
   const addForwardCurve = () => addHeadingAndNode({ type: 'forwardCurve', attrs: defaultForwardCurve() }, 'Procurement timing');
   const addKpiStrip = () => addHeadingAndNode({ type: 'kpiStrip', attrs: { data: defaultKpiStrip() } }, 'At a glance');
-  const addRecommendation = () => editor.chain().focus().insertContentAt(editor.state.doc.content.size, { type: 'recommendationBox', attrs: { data: defaultRecommendation() } }).run();
+  const addRecommendation = () => { setInsertOpen(false); editor.chain().focus().insertContentAt(blockInsertPos(), { type: 'recommendationBox', attrs: { data: defaultRecommendation() } }).run(); };
   const addComparison = () => addHeadingAndNode({ type: 'comparisonTable', attrs: { data: defaultComparison() } }, 'Your options compared');
+
+  // The blocks available in the Insert menu, grouped for clarity.
+  const INSERT_GROUPS: { group: string; items: { label: string; icon: typeof Gauge; onClick: () => void }[] }[] = [
+    { group: 'Highlights', items: [
+      { label: 'At a glance (KPIs)', icon: Gauge, onClick: addKpiStrip },
+      { label: 'Recommendation box', icon: CheckCircle2, onClick: addRecommendation },
+    ] },
+    { group: 'Data & tables', items: [
+      { label: 'Market metrics', icon: Table2, onClick: addMetrics },
+      { label: 'Forward curve & timing', icon: TrendingDown, onClick: addForwardCurve },
+      { label: 'Quote comparison', icon: Columns3, onClick: addComparison },
+    ] },
+    { group: 'Charts & evidence', items: [
+      { label: 'Price chart', icon: LineChartIcon, onClick: addPriceChart },
+      { label: 'Custom chart', icon: BarChart3, onClick: addCustomChart },
+      { label: 'Generation map', icon: MapIcon, onClick: addGridMap },
+      { label: 'News evidence', icon: Newspaper, onClick: addNews },
+    ] },
+  ];
+
+  // Document outline — the headings, for jump navigation.
+  const outline: { text: string; level: number; pos: number }[] = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'heading') outline.push({ text: node.textContent || 'Untitled', level: (node.attrs.level as number) ?? 2, pos });
+  });
+  const goToHeading = (pos: number) => {
+    setOutlineOpen(false);
+    editor.chain().focus().setTextSelection(pos + 1).run();
+    const at = editor.view.domAtPos(pos + 1)?.node as Node | undefined;
+    const el = at && at.nodeType === 1 ? (at as HTMLElement) : (at?.parentElement ?? null);
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
 
   const setLink = () => {
     const prev = (editor.getAttributes('link').href as string) ?? '';
@@ -204,7 +272,7 @@ export function CommsEditor({
   return (
     <div className="card overflow-hidden">
       {/* Formatting toolbar */}
-      <div className="flex flex-wrap items-center gap-1 p-2 border-b border-brand-line bg-brand-surface sticky top-[57px] z-[5]">
+      <div ref={toolbarRef} className="flex flex-wrap items-center gap-1 p-2 border-b border-brand-line bg-brand-surface sticky top-[57px] z-[5]">
         <ToolbarButton title="Bold" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}><Bold size={15} /></ToolbarButton>
         <ToolbarButton title="Italic" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic size={15} /></ToolbarButton>
         <span className="w-px h-5 bg-brand-line mx-0.5" />
@@ -219,7 +287,7 @@ export function CommsEditor({
           <button
             type="button"
             title="Rewrite the selected text (or current paragraph)"
-            onClick={() => setAiOpen((o) => !o)}
+            onClick={() => { setAiOpen((o) => !o); setInsertOpen(false); setOutlineOpen(false); }}
             disabled={!!aiAction}
             className="inline-flex items-center gap-1 h-8 px-2 rounded-md border text-sm bg-white text-brand-greenDark border-brand-line hover:bg-brand-tint disabled:opacity-50"
           >
@@ -236,21 +304,45 @@ export function CommsEditor({
           )}
         </div>
         <span className="flex-1" />
-        {/* Data blocks render as figures/boxes in an A4 document; emails are plain
-            prose, so the insert palette is hidden on the email surface. */}
+        {/* Outline jump menu — A4 documents with headings */}
+        {surface !== 'email' && outline.length > 0 && (
+          <div className="relative">
+            <button type="button" title="Jump to a section" onClick={() => { setOutlineOpen((o) => !o); setInsertOpen(false); setAiOpen(false); }}
+              className="inline-flex items-center gap-1 h-8 px-2 rounded-md border text-sm bg-white text-brand-ink border-brand-line hover:bg-brand-tint">
+              <ListTree size={14} /> <span className="hidden md:inline">Outline</span> <ChevronDown size={12} />
+            </button>
+            {outlineOpen && (
+              <div className="absolute right-0 mt-1 w-64 card p-1 z-20 max-h-72 overflow-auto" onMouseLeave={() => setOutlineOpen(false)}>
+                {outline.map((h, i) => (
+                  <button key={`${h.pos}-${i}`} className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint truncate" style={{ paddingLeft: h.level >= 3 ? 22 : 8 }} onClick={() => goToHeading(h.pos)} title={h.text}>{h.text}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {/* Insert blocks menu — data blocks render as figures/boxes in an A4
+            document; emails are plain prose so the palette is hidden for email. */}
         {surface !== 'email' && (
-          <>
-            <span className="label hidden sm:inline mr-1">Insert</span>
-            <ToolbarButton title="At a glance — KPI strip" onClick={addKpiStrip}><Gauge size={15} /></ToolbarButton>
-            <ToolbarButton title="Recommendation box" onClick={addRecommendation}><CheckCircle2 size={15} /></ToolbarButton>
-            <ToolbarButton title="Quote comparison table" onClick={addComparison}><Columns3 size={15} /></ToolbarButton>
-            <ToolbarButton title="Market metrics" onClick={addMetrics}><Table2 size={15} /></ToolbarButton>
-            <ToolbarButton title="Forward curve & procurement timing" onClick={addForwardCurve}><TrendingDown size={15} /></ToolbarButton>
-            <ToolbarButton title="Price chart" onClick={addPriceChart}><LineChartIcon size={15} /></ToolbarButton>
-            <ToolbarButton title="Custom chart" onClick={addCustomChart}><BarChart3 size={15} /></ToolbarButton>
-            <ToolbarButton title="Generation map" onClick={addGridMap}><MapIcon size={15} /></ToolbarButton>
-            <ToolbarButton title="News evidence" onClick={addNews}><Newspaper size={15} /></ToolbarButton>
-          </>
+          <div className="relative">
+            <button type="button" title="Insert a data block at the cursor" onClick={() => { setInsertOpen((o) => !o); setOutlineOpen(false); }}
+              className="inline-flex items-center gap-1 h-8 px-2 rounded-md border text-sm bg-white text-brand-greenDark border-brand-line hover:bg-brand-tint">
+              <Plus size={14} /> <span className="hidden md:inline">Insert</span> <ChevronDown size={12} />
+            </button>
+            {insertOpen && (
+              <div className="absolute right-0 mt-1 w-56 card p-1 z-20 max-h-96 overflow-auto" onMouseLeave={() => setInsertOpen(false)}>
+                {INSERT_GROUPS.map((g) => (
+                  <div key={g.group}>
+                    <div className="label px-2 pt-1.5 pb-0.5">{g.group}</div>
+                    {g.items.map((it) => (
+                      <button key={it.label} className="flex items-center gap-2 w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setInsertOpen(false); it.onClick(); }}>
+                        <it.icon size={14} className="text-brand-muted" /> {it.label}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -266,7 +358,7 @@ export function CommsEditor({
       ) : (
         /* The A4 document canvas */
         <div className="report-deck max-h-[80vh] overflow-auto">
-          <div className="report-page-wrap" ref={wrapRef}>
+          <div className="report-page-wrap" ref={wrapRef} style={{ zoom }}>
             <EditorContent editor={editor} className="report-sheet" />
             <div className="report-pagebreaks" aria-hidden>
               {Array.from({ length: Math.max(0, pages - 1) }).map((_, i) => (
@@ -279,8 +371,17 @@ export function CommsEditor({
         </div>
       )}
 
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-t border-brand-line text-[11px] text-brand-muted">
-        <Plus size={12} /> {surface === 'email' ? 'Email · type to write, format with the toolbar, then Copy email or Export' : 'A4 page · type to write, format with the toolbar, drag the handle on any block to reorder'}
+      <div className="flex items-center gap-3 px-3 py-1.5 border-t border-brand-line text-[11px] text-brand-muted">
+        <span className="tabular-nums">{words.toLocaleString('en-GB')} word{words === 1 ? '' : 's'}{surface !== 'email' ? ` · ${pages} page${pages === 1 ? '' : 's'}` : ''}</span>
+        <span className="hidden sm:inline truncate">{surface === 'email' ? '· type to write, format with the toolbar, then Copy email or Export' : '· Insert adds blocks at the cursor; drag the handle on any block to reorder'}</span>
+        <span className="flex-1" />
+        {surface !== 'email' && (
+          <span className="inline-flex items-center gap-1 shrink-0">
+            <button className="hover:text-brand-ink disabled:opacity-40" onClick={() => setZoom((z) => Math.max(0.6, Math.round((z - 0.1) * 10) / 10))} disabled={zoom <= 0.6} title="Zoom out"><ZoomOut size={13} /></button>
+            <button className="hover:text-brand-ink tabular-nums w-9 text-center" onClick={() => setZoom(1)} title="Reset zoom">{Math.round(zoom * 100)}%</button>
+            <button className="hover:text-brand-ink disabled:opacity-40" onClick={() => setZoom((z) => Math.min(1.4, Math.round((z + 0.1) * 10) / 10))} disabled={zoom >= 1.4} title="Zoom in"><ZoomIn size={13} /></button>
+          </span>
+        )}
       </div>
     </div>
   );
