@@ -9,7 +9,7 @@ import { renderLineChartSVG, type ChartOptions } from './chartSvg';
 import { renderGridMapSVG, gridMapHeight } from './gridMapSvg';
 import { analyzeCurve, procurementNarrative, forwardCurveChartOptions, commodityLabel, legValue } from './forwardCurve';
 import { inlineRuns, plainText, hasMarks, pdfFontStyle, inlineToDocx } from './serializeDoc';
-import type { ReportDoc, DocNode, ReportInputs, ReportMeta, MetricRow, ChartData, NewsRef, CustomChartData, GridSnapshot, ForwardCurveSnapshot, CommodityCurve, CurveLeg } from './api';
+import type { ReportDoc, DocNode, ReportInputs, ReportMeta, MetricRow, ChartData, NewsRef, CustomChartData, GridSnapshot, ForwardCurveSnapshot, CommodityCurve, CurveLeg, KpiStripData, ComparisonTableData, RecommendationBoxData } from './api';
 
 // Branded client-side report export — no server, no Puppeteer. Walks the TipTap
 // document (headings, rich paragraphs, lists, quotes + the embedded metrics /
@@ -17,9 +17,24 @@ import type { ReportDoc, DocNode, ReportInputs, ReportMeta, MetricRow, ChartData
 // (docx). Charts are rasterised from SVG → PNG via a canvas. The header, footer,
 // disclaimer and source attribution are unchanged from the original exporter.
 
-const DISCLAIMER =
-  'This report is for general information only and does not constitute a price quotation or financial advice. Market figures are indicative. Green Shift Energy Consulting.';
+const DISCLAIMER_BASE =
+  'This report is for general information only and does not constitute a price quotation or financial advice, nor a personal recommendation to buy or sell. Market figures are indicative. Green Shift Energy Consulting.';
+// Extra disclaimers injected per report kind (always added — the agent can't remove them).
+const DISCLAIMER_EXTRA: Record<string, string[]> = {
+  'procure-ahead': ['Forward prices are indicative market levels and are not a reliable indicator of future prices; the read is based on the shape of the curve at the stated snapshot time.'],
+  renewal: ['Any saving depends on your actual consumption and the contract ultimately secured. Indicative levels only.'],
+  'ooc-warning': ['Deemed / out-of-contract rate comparisons are illustrative; your actual rates depend on your supplier and meter type.'],
+  tender: ['Green Shift Energy acts as a third-party intermediary and may receive a commission or fee from the supplier, which is reflected in the rates and disclosed in the supplier’s contract. Comparison figures are indicative and exclude VAT unless stated.'],
+  'market-update': ['General market commentary only, not a personal recommendation.'],
+};
+const disclaimerSet = (kind?: string): string[] => [DISCLAIMER_BASE, ...(kind && DISCLAIMER_EXTRA[kind] ? DISCLAIMER_EXTRA[kind] : [])];
+
+// Report identity for the cover/letterhead, with the market-report defaults.
+function reportIdentity(meta: ReportMeta): { title: string; subtitle?: string } {
+  return { title: meta.reportTitle?.trim() || 'Energy Market Report', subtitle: meta.reportSubtitle?.trim() || undefined };
+}
 const dateStr = () => new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+const asAt = (iso?: string) => (iso ? new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 
 const RGB = {
   green: [64, 168, 0] as [number, number, number],
@@ -108,12 +123,22 @@ const nodes = (doc: ReportDoc): DocNode[] => doc.content ?? [];
 // Drop a generation-map block whose snapshot never loaded (it would render nothing)
 // together with the heading that solely introduces it — avoids an orphan heading
 // if a report is exported in the brief window before the map's data resolves.
+// A data block that never resolved (or was inserted empty) renders nothing —
+// drop it together with the heading that solely introduces it, so the export
+// has no orphan headings or stray captions.
+function isEmptyEmbed(n: DocNode): boolean {
+  const a = n.attrs as { snapshot?: unknown; data?: { cards?: unknown[]; rows?: { option?: string }[] } } | undefined;
+  if (n.type === 'gridMap' || n.type === 'forwardCurve') return !a?.snapshot;
+  if (n.type === 'kpiStrip') return !(a?.data?.cards?.length);
+  if (n.type === 'comparisonTable') return !((a?.data?.rows ?? []).some((r) => (r.option ?? '').trim()));
+  return false;
+}
 function exportNodes(doc: ReportDoc): DocNode[] {
   const ns = nodes(doc);
   const out: DocNode[] = [];
   for (let i = 0; i < ns.length; i++) {
     const n = ns[i];
-    if ((n.type === 'gridMap' || n.type === 'forwardCurve') && !(n.attrs as { snapshot?: unknown } | undefined)?.snapshot) {
+    if (isEmptyEmbed(n)) {
       const prev = ns[i - 1];
       if (prev && prev.type === 'heading' && out[out.length - 1] === prev) out.pop();
       continue;
@@ -121,6 +146,18 @@ function exportNodes(doc: ReportDoc): DocNode[] {
     out.push(n);
   }
   return out;
+}
+
+// The disclaimer set: the report-kind set, UNION any caveat required by a data
+// block actually present (so a forward curve always carries the not-a-forecast
+// caveat and a comparison table always carries the commission disclosure,
+// regardless of the template's reportKind).
+function allDisclaimers(doc: ReportDoc, kind?: string): string[] {
+  const set = new Set(disclaimerSet(kind));
+  const types = new Set((doc.content ?? []).map((n) => n.type));
+  if (types.has('forwardCurve') || types.has('kpiStrip')) DISCLAIMER_EXTRA['procure-ahead'].forEach((d) => set.add(d));
+  if (types.has('comparisonTable')) DISCLAIMER_EXTRA.tender.forEach((d) => set.add(d));
+  return [...set];
 }
 
 // Generation-map block → rasterised SVG. Rendered at a larger width for a crisp
@@ -142,25 +179,33 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
   const M = 48;
   const cW = W - M * 2;
   let y = M;
+  let fig = 0;
 
   // Reserve room for the running footer; continuation pages start below the
   // running header (both drawn in a post-pass once the page count is known).
   const FOOTER_H = 34;
   const ensure = (need: number) => { if (y + need > H - M - FOOTER_H) { pdf.addPage(); y = M + 14; } };
 
-  // — Branded cover header —
+  // — Branded cover header (identity is dynamic per report kind) —
+  const ident = reportIdentity(meta);
   const logo = await loadImage('/gse.png');
   if (logo) pdf.addImage(logo.dataUrl, 'PNG', M, y, 110, (logo.h / logo.w) * 110, undefined, 'FAST');
   pdf.setFontSize(9).setTextColor(...RGB.muted);
-  pdf.text('Market & Procurement Report', W - M, y + 8, { align: 'right' });
-  pdf.text(dateStr(), W - M, y + 20, { align: 'right' });
+  pdf.text(dateStr(), W - M, y + 8, { align: 'right' });
+  if (meta.asOf) pdf.setFontSize(7.5).text(`Prices as at ${asAt(meta.asOf)}`, W - M, y + 19, { align: 'right' });
   y += 42;
   pdf.setDrawColor(...RGB.green).setLineWidth(2).line(M, y, W - M, y);
   y += 26;
-  pdf.setFont('helvetica', 'bold').setFontSize(22).setTextColor(...RGB.ink).text('Energy Market Report', M, y);
-  y += 17;
+  pdf.setFont('helvetica', 'bold').setFontSize(22).setTextColor(...RGB.ink);
+  for (const ln of pdf.splitTextToSize(ident.title, cW)) { pdf.text(ln, M, y); y += 24; }
+  y -= 7;
+  if (ident.subtitle) {
+    y += 4;
+    pdf.setFont('helvetica', 'normal').setFontSize(11).setTextColor(...RGB.greenDark).text(ident.subtitle, M, y);
+    y += 16;
+  }
   pdf.setFont('helvetica', 'normal').setFontSize(10.5).setTextColor(...RGB.muted)
-    .text('Prepared for ' + (inputs.companyName || inputs.clientName || 'your business'), M, y);
+    .text('Prepared for ' + (inputs.companyName || inputs.clientName || 'your business') + '  ·  Green Shift Energy', M, y);
   y += 16;
 
   // Client details in a tinted two-column panel.
@@ -362,9 +407,6 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
       });
       y = (pdf as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
     }
-    pdf.setFont('helvetica', 'italic').setFontSize(8).setTextColor(...RGB.muted);
-    const cap = `${snap.source} · report ${new Date(snap.asOfDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}. Indicative market levels, for information only.`;
-    for (const ln of pdf.splitTextToSize(cap, cW)) { ensure(11); pdf.text(ln, M, y); y += 11; }
   };
 
   const pdfImage = async (node: DocNode) => {
@@ -379,6 +421,88 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
     y += h + 8;
   };
 
+  // Auto-numbered "Figure N. Source: … Data as at …" caption under a figure.
+  const pdfFigureCaption = (source: string, dateIso?: string | null) => {
+    fig += 1;
+    const when = dateIso === null ? '' : (dateIso ? asAt(dateIso) : (meta.asOf ? asAt(meta.asOf) : ''));
+    const cap = `Figure ${fig}. Source: ${source}.${when ? ` Data as at ${when}.` : ''}`;
+    pdf.setFont('helvetica', 'italic').setFontSize(8).setTextColor(...RGB.muted);
+    for (const ln of pdf.splitTextToSize(cap, cW)) { ensure(10); pdf.text(ln, M, y); y += 10; }
+    y += 2;
+  };
+
+  const pdfKpiStrip = (data: KpiStripData) => {
+    const cards = data.cards ?? [];
+    if (!cards.length) return;
+    const gap = 8;
+    const cardW = (cW - gap * (cards.length - 1)) / cards.length;
+    const cardH = 50;
+    ensure(cardH + 6);
+    cards.forEach((c, i) => {
+      const cx = M + i * (cardW + gap);
+      const accent = c.tone === 'accent';
+      if (accent) { pdf.setFillColor(244, 250, 239); pdf.setDrawColor(...RGB.green); } else { pdf.setFillColor(255, 255, 255); pdf.setDrawColor(...RGB.line); }
+      pdf.setLineWidth(0.7).roundedRect(cx, y, cardW, cardH, 4, 4, 'FD');
+      pdf.setFont('helvetica', 'bold').setFontSize(6.5).setTextColor(...RGB.muted);
+      pdf.text(pdf.splitTextToSize(c.label.toUpperCase(), cardW - 12).slice(0, 2), cx + 6, y + 12);
+      pdf.setFont('helvetica', 'bold').setFontSize(15).setTextColor(...(accent ? RGB.greenDark : RGB.ink));
+      pdf.text(String(c.value), cx + 6, y + 33);
+      pdf.setFont('helvetica', 'normal').setFontSize(7).setTextColor(...RGB.muted);
+      const sub = [c.unit, c.delta != null ? `${c.delta > 0 ? '+' : ''}${c.delta}%` : ''].filter(Boolean).join('  ');
+      if (sub) pdf.text(sub.slice(0, 28), cx + 6, y + 44);
+    });
+    y += cardH + 4;
+    pdfFigureCaption('Indicative UK market benchmarks' + (data.note ? `; ${data.note}` : ''));
+  };
+
+  const pdfRecommendation = (data: RecommendationBoxData) => {
+    const text = (data?.text ?? '').trim();
+    if (!text) return;
+    const label = (data?.label || 'Our recommendation').toUpperCase();
+    const innerW = cW - 22;
+    pdf.setFont('helvetica', 'normal').setFontSize(10);
+    const lines = pdf.splitTextToSize(text, innerW);
+    const boxH = 22 + lines.length * 13 + 8;
+    // A single fixed-height rect can't page-break; for an unusually long verdict,
+    // fall back to a flowing label + paragraph (per-line ensure handles breaks).
+    if (boxH > H - M * 2 - FOOTER_H) {
+      ensure(20);
+      pdf.setFillColor(...RGB.green).rect(M, y - 8.5, 3, 11, 'F');
+      pdf.setFont('helvetica', 'bold').setFontSize(9).setTextColor(...RGB.greenDark).text(label, M + 9, y); y += 14;
+      pdf.setFont('helvetica', 'normal').setFontSize(10).setTextColor(...RGB.ink);
+      for (const ln of lines) { ensure(13); pdf.text(ln, M + 9, y); y += 13; }
+      y += 6;
+      return;
+    }
+    ensure(boxH + 4);
+    pdf.setFillColor(244, 250, 239).setDrawColor(...RGB.green).setLineWidth(0).rect(M, y, cW, boxH, 'F');
+    pdf.setFillColor(...RGB.green).rect(M, y, 4, boxH, 'F');
+    pdf.setFont('helvetica', 'bold').setFontSize(8).setTextColor(...RGB.greenDark).text(label, M + 14, y + 15);
+    pdf.setFont('helvetica', 'normal').setFontSize(10).setTextColor(...RGB.ink);
+    let ty = y + 30;
+    for (const ln of lines) { pdf.text(ln, M + 14, ty); ty += 13; }
+    y += boxH + 8;
+  };
+
+  const pdfComparison = (data: ComparisonTableData) => {
+    const rows = (data?.rows ?? []).filter((r) => (r.option ?? '').trim());
+    if (!rows.length) return;
+    const recIdx = rows.findIndex((r) => r.recommended);
+    autoTable(pdf, {
+      startY: y,
+      margin: { left: M, right: M },
+      head: [['Option', 'Unit rate', 'Standing', 'Term', 'Annual cost', 'Green', '']],
+      body: rows.map((r) => [r.option, r.unitRate || '—', r.standingCharge || '—', r.term || '—', r.annualCost || '—', r.green ? 'Yes' : '—', r.recommended ? 'Recommended' : '']),
+      theme: 'grid',
+      styles: { fontSize: 8.5, cellPadding: 4, lineColor: RGB.line, textColor: RGB.ink },
+      headStyles: { fillColor: [244, 250, 239], textColor: RGB.greenDark, fontStyle: 'bold' },
+      columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'center' }, 6: { halign: 'center', textColor: RGB.greenDark, fontStyle: 'bold' } },
+      didParseCell: (d) => { if (d.section === 'body' && recIdx >= 0 && d.row.index === recIdx) d.cell.styles.fillColor = [244, 250, 239]; },
+    });
+    y = (pdf as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 4;
+    pdfFigureCaption(`Supplier quotes compiled by Green Shift Energy — indicative, may exclude VAT; Green Shift acts as a third-party intermediary and may earn a commission${(data?.caption ?? '').trim() ? `. ${data.caption!.trim()}` : ''}`, null);
+  };
+
   for (const node of exportNodes(doc)) {
     switch (node.type) {
       case 'heading': pdfHeading(node); break;
@@ -386,33 +510,40 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
       case 'bulletList': pdfList(node, false); break;
       case 'orderedList': pdfList(node, true); break;
       case 'blockquote': pdfBlockquote(node); break;
-      case 'metricsTable': pdfMetrics(node); break;
-      case 'priceChart': await pdfChartImage(priceChartOpts(node.attrs?.chart as ChartData)); break;
+      case 'metricsTable': { const rows = (node.attrs?.rows as MetricRow[]) ?? []; if (rows.length) { pdfMetrics(node); pdfFigureCaption('Indicative UK market benchmarks', node.attrs?.asOf as string | undefined); } break; }
+      case 'priceChart': { const c = node.attrs?.chart as ChartData; if (c?.points?.length) { await pdfChartImage(priceChartOpts(c)); pdfFigureCaption(c?.sourceName || c?.label || 'Market price history'); } break; }
       case 'customChart': {
         const d = node.attrs?.data as CustomChartData;
-        await pdfChartImage(customChartOpts(d), d.caption);
+        if (d?.points?.length) { await pdfChartImage(customChartOpts(d), d.caption); pdfFigureCaption(d?.sourceName || 'Green Shift Energy analysis'); }
         break;
       }
       case 'newsList': pdfNews((node.attrs?.items as NewsRef[]) ?? []); break;
-      case 'gridMap': await pdfGridMap(node.attrs?.snapshot as GridSnapshot | null, (node.attrs?.mode as 'intensity' | 'fuel') ?? 'intensity'); break;
-      case 'forwardCurve': await pdfForwardCurve(node.attrs?.snapshot as ForwardCurveSnapshot | null); break;
+      case 'gridMap': { const gs = node.attrs?.snapshot as GridSnapshot | null; if (gs?.regions?.length) { await pdfGridMap(gs, (node.attrs?.mode as 'intensity' | 'fuel') ?? 'intensity'); pdfFigureCaption('NESO Carbon Intensity (CC BY 4.0) & Elexon (BMRS)'); } break; }
+      case 'forwardCurve': { const fs = node.attrs?.snapshot as ForwardCurveSnapshot | null; await pdfForwardCurve(fs); if (fs?.curves?.length) pdfFigureCaption(`${fs.source} — forward snapshot; indicative forward levels, not a reliable indicator of future prices`, fs.asOfDate); break; }
+      case 'kpiStrip': pdfKpiStrip(node.attrs?.data as KpiStripData); break;
+      case 'recommendationBox': pdfRecommendation(node.attrs?.data as RecommendationBoxData); break;
+      case 'comparisonTable': pdfComparison(node.attrs?.data as ComparisonTableData); break;
       case 'image': await pdfImage(node); break;
       default: if (node.content?.length) pdfParagraph(node);
     }
     y += 6;
   }
 
-  // — Disclaimer + attribution flow at the end of the content —
-  ensure(44);
-  y += 6;
+  // — Sources & methodology, then the per-report-kind disclaimer set —
+  ensure(54);
+  y += 8;
   pdf.setDrawColor(...RGB.line).setLineWidth(0.5).line(M, y, W - M, y);
+  y += 13;
+  pdf.setFont('helvetica', 'bold').setFontSize(8).setTextColor(...RGB.greenDark).text('SOURCES & METHODOLOGY', M, y);
   y += 12;
+  pdf.setFont('helvetica', 'normal').setFontSize(7.5).setTextColor(...RGB.muted);
+  if (meta.asOf) { for (const ln of pdf.splitTextToSize(`Market data as at ${asAt(meta.asOf)}. Report generated ${dateStr()}.`, cW)) { ensure(10); pdf.text(ln, M, y); y += 10; } }
+  if (meta.attributions?.length) for (const ln of pdf.splitTextToSize(meta.attributions.join(' '), cW)) { ensure(10); pdf.text(ln, M, y); y += 10; }
+  y += 4;
   pdf.setFont('helvetica', 'italic').setFontSize(7.5).setTextColor(...RGB.muted);
-  for (const ln of pdf.splitTextToSize(DISCLAIMER, cW)) { ensure(10); pdf.text(ln, M, y); y += 10; }
-  if (meta.attributions?.length) {
-    y += 3;
-    pdf.setFont('helvetica', 'normal');
-    for (const ln of pdf.splitTextToSize(meta.attributions.join(' '), cW)) { ensure(10); pdf.text(ln, M, y); y += 10; }
+  for (const d of allDisclaimers(doc, meta.reportKind)) {
+    for (const ln of pdf.splitTextToSize(d, cW)) { ensure(10); pdf.text(ln, M, y); y += 10; }
+    y += 2;
   }
 
   // — Running header (pages 2+) and footer with page numbers (all pages) —
@@ -421,7 +552,7 @@ export async function exportReportPdf(inputs: ReportInputs, doc: ReportDoc, meta
     pdf.setPage(i);
     if (i > 1) {
       pdf.setFont('helvetica', 'normal').setFontSize(7.5).setTextColor(...RGB.muted);
-      pdf.text('Energy Market Report' + (inputs.companyName ? ` — ${inputs.companyName}` : ''), M, 30);
+      pdf.text(ident.title + (inputs.companyName ? ` — ${inputs.companyName}` : ''), M, 30);
       pdf.text(dateStr(), W - M, 30, { align: 'right' });
       pdf.setDrawColor(...RGB.line).setLineWidth(0.5).line(M, 36, W - M, 36);
     }
@@ -495,6 +626,81 @@ function docForwardCurveTable(curve: CommodityCurve, cheapest: CurveLeg | null):
   return new Table({ width: { size: 70, type: WidthType.PERCENTAGE }, rows: [head, ...rows] });
 }
 
+// KPI "at a glance" strip → a single-row table of bordered cards.
+function docKpiStrip(data: KpiStripData): Table {
+  const cards = (data.cards ?? []).slice(0, 4);
+  const cell = (c: KpiStripData['cards'][number]) => new TableCell({
+    width: { size: Math.floor(100 / cards.length), type: WidthType.PERCENTAGE },
+    shading: c.tone === 'accent' ? { type: ShadingType.CLEAR, fill: 'F4FAEF', color: 'auto' } : undefined,
+    borders: {
+      top: { style: BorderStyle.SINGLE, size: 4, color: c.tone === 'accent' ? '40A800' : 'E7E8E6' },
+      bottom: { style: BorderStyle.SINGLE, size: 4, color: c.tone === 'accent' ? '40A800' : 'E7E8E6' },
+      left: { style: BorderStyle.SINGLE, size: 4, color: c.tone === 'accent' ? '40A800' : 'E7E8E6' },
+      right: { style: BorderStyle.SINGLE, size: 4, color: c.tone === 'accent' ? '40A800' : 'E7E8E6' },
+    },
+    margins: { top: 60, bottom: 60, left: 90, right: 90 },
+    children: [
+      new Paragraph({ spacing: { after: 20 }, children: [new TextRun({ text: c.label.toUpperCase(), bold: true, size: 12, color: '6B6A70' })] }),
+      new Paragraph({ spacing: { after: 10 }, children: [new TextRun({ text: String(c.value), bold: true, size: 30, color: c.tone === 'accent' ? '318300' : '2B2A2E' })] }),
+      new Paragraph({ children: [new TextRun({ text: [c.unit, c.delta != null ? `${c.delta > 0 ? '+' : ''}${c.delta}%` : ''].filter(Boolean).join('   '), size: 14, color: '6B6A70' })] }),
+    ],
+  });
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [new TableRow({ children: cards.map(cell) })] });
+}
+
+// Recommendation verdict → a tinted single-cell table with a green left rule.
+function docRecommendationBox(data: RecommendationBoxData): Table {
+  const text = (data?.text ?? '').trim();
+  const label = (data?.label || 'Our recommendation').toUpperCase();
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [new TableRow({ children: [new TableCell({
+      shading: { type: ShadingType.CLEAR, fill: 'F4FAEF', color: 'auto' },
+      borders: {
+        left: { style: BorderStyle.SINGLE, size: 18, color: '40A800' },
+        top: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+        bottom: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+        right: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+      },
+      margins: { top: 100, bottom: 100, left: 160, right: 160 },
+      children: [
+        new Paragraph({ spacing: { after: 40 }, children: [new TextRun({ text: label, bold: true, size: 16, color: '318300' })] }),
+        new Paragraph({ children: [new TextRun({ text, size: 20, color: '2B2A2E' })] }),
+      ],
+    })] })],
+  });
+}
+
+// Supplier / scenario comparison → a table with the recommended row tinted.
+function docComparisonTable(data: ComparisonTableData): Table {
+  const rows = (data?.rows ?? []).filter((r) => (r.option ?? '').trim());
+  const headLabels = ['Option', 'Unit rate', 'Standing', 'Term', 'Annual cost', 'Green', ''];
+  const cell = (text: string, opts: { bold?: boolean; align?: (typeof AlignmentType)[keyof typeof AlignmentType]; color?: string; fill?: string } = {}) =>
+    new TableCell({
+      shading: opts.fill ? { type: ShadingType.CLEAR, fill: opts.fill, color: 'auto' } : undefined,
+      borders: {
+        top: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' }, left: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' },
+        right: { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' }, bottom: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6' },
+      },
+      margins: { top: 30, bottom: 30, left: 60, right: 60 },
+      children: [new Paragraph({ alignment: opts.align, children: [new TextRun({ text, bold: opts.bold, size: 18, color: opts.color })] })],
+    });
+  const head = new TableRow({ children: headLabels.map((h, i) => cell(h, { bold: true, color: '318300', align: i >= 1 && i <= 4 ? AlignmentType.RIGHT : undefined })) });
+  const body = rows.map((r) => {
+    const fill = r.recommended ? 'F4FAEF' : undefined;
+    return new TableRow({ children: [
+      cell(r.option, { bold: r.recommended, fill }),
+      cell(r.unitRate || '—', { align: AlignmentType.RIGHT, fill }),
+      cell(r.standingCharge || '—', { align: AlignmentType.RIGHT, fill }),
+      cell(r.term || '—', { align: AlignmentType.RIGHT, fill }),
+      cell(r.annualCost || '—', { align: AlignmentType.RIGHT, fill }),
+      cell(r.green ? 'Yes' : '—', { align: AlignmentType.CENTER, fill }),
+      cell(r.recommended ? 'Recommended' : '', { bold: true, color: '318300', align: AlignmentType.CENTER, fill }),
+    ] });
+  });
+  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [head, ...body] });
+}
+
 function docHeadingNode(node: DocNode): Paragraph {
   const text = plainText(node);
   const level = (node.attrs?.level as number) ?? 2;
@@ -565,27 +771,41 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
     const h = Math.round((logo.h / logo.w) * w) || 40;
     children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: dataUrlToBytes(logo.dataUrl), transformation: { width: w, height: h } })] }));
   }
+  const ident = reportIdentity(meta);
   children.push(new Paragraph({
     spacing: { before: 160, after: 40 },
-    children: [new TextRun({ text: 'MARKET & PROCUREMENT REPORT', bold: true, size: 16, color: '40A800' })],
+    children: [new TextRun({ text: 'GREEN SHIFT ENERGY', bold: true, size: 16, color: '40A800' })],
   }));
   children.push(new Paragraph({
     border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: '40A800', space: 6 } },
-    spacing: { after: 80 },
-    children: [new TextRun({ text: 'Energy Market Report', bold: true, size: 40, color: '2B2A2E' })],
+    spacing: { after: ident.subtitle ? 40 : 80 },
+    children: [new TextRun({ text: ident.title, bold: true, size: 40, color: '2B2A2E' })],
   }));
+  if (ident.subtitle) {
+    children.push(new Paragraph({ spacing: { after: 80 }, children: [new TextRun({ text: ident.subtitle, size: 24, color: '318300' })] }));
+  }
   children.push(new Paragraph({
-    spacing: { after: 200 },
+    spacing: { after: meta.asOf ? 40 : 200 },
     children: [
       new TextRun({ text: `Prepared for ${inputs.companyName || inputs.clientName || 'your business'}`, color: '6B6A70', size: 21 }),
-      new TextRun({ text: `  ·  ${dateStr()}`, color: '6B6A70', size: 21 }),
+      new TextRun({ text: `  ·  Green Shift Energy  ·  ${dateStr()}`, color: '6B6A70', size: 21 }),
     ],
   }));
+  if (meta.asOf) {
+    children.push(new Paragraph({ spacing: { after: 200 }, children: [new TextRun({ text: `Prices as at ${asAt(meta.asOf)}`, color: '6B6A70', size: 16, italics: true })] }));
+  }
   const details = detailRows(inputs).filter(([, v]) => v) as [string, string][];
   if (details.length) {
     children.push(docDetailsPanel(details));
     children.push(new Paragraph({ spacing: { after: 120 }, children: [] }));
   }
+
+  let fig = 0;
+  const docFig = (source: string, dateIso?: string | null) => {
+    fig += 1;
+    const when = dateIso === null ? '' : (dateIso ? asAt(dateIso) : (meta.asOf ? asAt(meta.asOf) : ''));
+    return new Paragraph({ spacing: { before: 40, after: 100 }, children: [new TextRun({ text: `Figure ${fig}. Source: ${source}.${when ? ` Data as at ${when}.` : ''}`, italics: true, size: 15, color: '6B6A70' })] });
+  };
 
   for (const node of exportNodes(doc)) {
     switch (node.type) {
@@ -595,21 +815,43 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
       case 'orderedList': children.push(...docList(node, true)); break;
       case 'blockquote': children.push(...docBlockquote(node)); break;
       case 'metricsTable': {
-        children.push(docMetricsTable((node.attrs?.rows as MetricRow[]) ?? []));
-        const asOf = node.attrs?.asOf as string | undefined;
-        if (asOf) children.push(new Paragraph({ spacing: { before: 40 }, children: [new TextRun({ text: `Indicative market data, as of ${asOf}.`, italics: true, size: 16, color: '6B6A70' })] }));
+        const rows = (node.attrs?.rows as MetricRow[]) ?? [];
+        if (rows.length) { children.push(docMetricsTable(rows)); children.push(docFig('Indicative UK market benchmarks', node.attrs?.asOf as string | undefined)); }
+        break;
+      }
+      case 'kpiStrip': {
+        const data = node.attrs?.data as KpiStripData;
+        if (data?.cards?.length) { children.push(docKpiStrip(data)); children.push(docFig('Indicative UK market benchmarks' + (data.note ? `; ${data.note}` : ''))); }
+        break;
+      }
+      case 'recommendationBox': {
+        const data = node.attrs?.data as RecommendationBoxData;
+        if ((data?.text ?? '').trim()) children.push(docRecommendationBox(data));
+        break;
+      }
+      case 'comparisonTable': {
+        const data = node.attrs?.data as ComparisonTableData;
+        const rows = (data?.rows ?? []).filter((r) => (r.option ?? '').trim());
+        if (rows.length) { children.push(docComparisonTable(data)); children.push(docFig(`Supplier quotes compiled by Green Shift Energy — indicative, may exclude VAT; Green Shift acts as a third-party intermediary and may earn a commission${(data?.caption ?? '').trim() ? `. ${data.caption!.trim()}` : ''}`, null)); }
         break;
       }
       case 'priceChart': {
-        const png = dataUrlToBytes(await svgToPngDataUrl(renderLineChartSVG(priceChartOpts(node.attrs?.chart as ChartData)), 760, 300));
-        children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: 600, height: 237 } })] }));
+        const c = node.attrs?.chart as ChartData;
+        if (c?.points?.length) {
+          const png = dataUrlToBytes(await svgToPngDataUrl(renderLineChartSVG(priceChartOpts(c)), 760, 300));
+          children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: 600, height: 237 } })] }));
+          children.push(docFig(c?.sourceName || c?.label || 'Market price history'));
+        }
         break;
       }
       case 'customChart': {
         const d = node.attrs?.data as CustomChartData;
-        const png = dataUrlToBytes(await svgToPngDataUrl(renderLineChartSVG(customChartOpts(d)), 760, 300));
-        children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: 600, height: 237 } })] }));
-        if (d.caption) children.push(new Paragraph({ spacing: { before: 40 }, children: [new TextRun({ text: d.caption, italics: true, size: 16, color: '6B6A70' })] }));
+        if (d?.points?.length) {
+          const png = dataUrlToBytes(await svgToPngDataUrl(renderLineChartSVG(customChartOpts(d)), 760, 300));
+          children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: 600, height: 237 } })] }));
+          if (d.caption) children.push(new Paragraph({ spacing: { before: 40 }, children: [new TextRun({ text: d.caption, italics: true, size: 16, color: '6B6A70' })] }));
+          children.push(docFig(d?.sourceName || 'Green Shift Energy analysis'));
+        }
         break;
       }
       case 'newsList': {
@@ -627,6 +869,7 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
           const h = Math.round((svgH / GRID_MAP_W) * w);
           children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: w, height: h } })] }));
           children.push(new Paragraph({ spacing: { before: 40 }, children: [new TextRun({ text: gridMapCaption(snap), italics: true, size: 16, color: '6B6A70' })] }));
+          children.push(docFig('NESO Carbon Intensity (CC BY 4.0) & Elexon (BMRS)'));
         }
         break;
       }
@@ -640,7 +883,7 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
           children.push(new Paragraph({ children: [new ImageRun({ type: 'png', data: png, transformation: { width: 600, height: 237 } })] }));
           children.push(docForwardCurveTable(curve, a && a.hasForwardValue ? a.cheapest : null));
         }
-        if (snap) children.push(new Paragraph({ spacing: { before: 40 }, children: [new TextRun({ text: `${snap.source} · report ${new Date(snap.asOfDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}. Indicative market levels, for information only.`, italics: true, size: 16, color: '6B6A70' })] }));
+        if (snap?.curves?.length) children.push(docFig(`${snap.source} — forward snapshot; indicative forward levels, not a reliable indicator of future prices`, snap.asOfDate));
         break;
       }
       case 'image': {
@@ -659,9 +902,13 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
     }
   }
 
-  children.push(new Paragraph({ spacing: { before: 280, after: 20 }, border: { top: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6', space: 6 } }, children: [new TextRun({ text: DISCLAIMER, italics: true, size: 15, color: '6B6A70' })] }));
+  children.push(new Paragraph({ spacing: { before: 280, after: 40 }, border: { top: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6', space: 6 } }, children: [new TextRun({ text: 'SOURCES & METHODOLOGY', bold: true, size: 16, color: '318300' })] }));
+  if (meta.asOf) children.push(new Paragraph({ children: [new TextRun({ text: `Market data as at ${asAt(meta.asOf)}. Report generated ${dateStr()}.`, size: 14, color: '6B6A70' })] }));
   if (meta.attributions?.length) {
     children.push(new Paragraph({ children: [new TextRun({ text: meta.attributions.join(' '), size: 14, color: '6B6A70' })] }));
+  }
+  for (const d of allDisclaimers(doc, meta.reportKind)) {
+    children.push(new Paragraph({ spacing: { before: 60 }, children: [new TextRun({ text: d, italics: true, size: 14, color: '6B6A70' })] }));
   }
 
   const runningFooter = () => new Footer({
@@ -694,7 +941,7 @@ export async function exportReportDocx(inputs: ReportInputs, doc: ReportDoc, met
             border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: 'E7E8E6', space: 4 } },
             tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX }],
             children: [
-              new TextRun({ text: `Energy Market Report${inputs.companyName ? ` — ${inputs.companyName}` : ''}`, size: 14, color: '6B6A70' }),
+              new TextRun({ text: `${ident.title}${inputs.companyName ? ` — ${inputs.companyName}` : ''}`, size: 14, color: '6B6A70' }),
               new TextRun({ children: ['\t', dateStr()], size: 14, color: '6B6A70' }),
             ],
           })],

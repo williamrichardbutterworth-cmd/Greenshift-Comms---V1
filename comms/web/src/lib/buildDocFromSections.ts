@@ -62,6 +62,14 @@ function embedNode(ref: string, ctx: BuildContext): DocNode | null {
   if (ref === 'marketSnapshot') return ctx.snapshot ? metricsNode(ctx.snapshot) : null;
   if (ref === 'generationMap') return { type: 'gridMap', attrs: { snapshot: null, mode: 'intensity' } };
   if (ref === 'forwardCurve') return { type: 'forwardCurve', attrs: { snapshot: null } };
+  if (ref === 'kpiStrip') return { type: 'kpiStrip', attrs: { data: { cards: [] } } };
+  if (ref === 'comparisonTable') return {
+    type: 'comparisonTable',
+    attrs: { data: { rows: [
+      { option: 'Supplier A', unitRate: '', standingCharge: '', term: '', annualCost: '', green: false, recommended: true },
+      { option: 'Supplier B', unitRate: '', standingCharge: '', term: '', annualCost: '', green: false, recommended: false },
+    ] } },
+  };
   if (ref === 'selectedNews') return ctx.selectedNews?.length ? { type: 'newsList', attrs: { items: ctx.selectedNews } } : null;
   if (ref.startsWith('chart:')) {
     const [, series, range] = ref.split(':');
@@ -80,8 +88,16 @@ export function buildDocFromSections(sections: SectionSpec[], ctx: BuildContext)
   const content: DocNode[] = [];
   for (const s of (sections ?? []).slice(0, MAX_SECTIONS)) {
     if (s.kind === 'text') {
-      if (s.heading) content.push(headingNode(s.heading));
-      content.push(...textToNodes(s.body));
+      // The verdict section becomes a styled recommendation box (matched
+      // precisely so analytical "why we recommend…" sections stay as prose).
+      const h = (s.heading ?? '').trim().toLowerCase();
+      const isRec = h === 'our recommendation' || h === 'recommendation' || h === 'our advice';
+      if (isRec && (s.body ?? '').trim()) {
+        content.push({ type: 'recommendationBox', attrs: { data: { text: (s.body ?? '').trim(), label: s.heading } } });
+      } else {
+        if (s.heading) content.push(headingNode(s.heading));
+        content.push(...textToNodes(s.body));
+      }
     } else {
       const node = embedNode(s.ref, ctx);
       if (!node) continue; // drop unknown/unavailable embeds (and their heading)

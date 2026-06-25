@@ -62,6 +62,8 @@ const VALID_REF = (ref: string, ctx: AssembleContext): boolean =>
   ref === 'marketSnapshot' ||
   ref === 'generationMap' ||
   ref === 'forwardCurve' ||
+  ref === 'kpiStrip' ||
+  ref === 'comparisonTable' ||
   ref === 'selectedNews' ||
   /^chart:(brent|gas|power):(3m|6m|12m)$/.test(ref) ||
   (ctx.customCharts ?? []).some((c) => ref === `customChart:${c.id}`);
@@ -177,33 +179,35 @@ export interface SourceAnalysis {
   profile: Record<string, string>;
   summary: string;
   points: string[];
+  /** Client-specific conversational angles/hooks for the next call. */
+  angles: string[];
   suggestedMilestones: string[];
   provider: string;
   error?: string;
 }
 
 export async function analyzeSource(text: string, kind: SourceKind, currentInputs?: ReportInputs): Promise<SourceAnalysis> {
-  const empty: SourceAnalysis = { kind, profile: {}, summary: '', points: [], suggestedMilestones: [], provider: 'none' };
+  const empty: SourceAnalysis = { kind, profile: {}, summary: '', points: [], angles: [], suggestedMilestones: [], provider: 'none' };
   if (!text.trim()) return empty;
   if (!aiConfigured()) return { ...empty, error: 'Automatic analysis isn’t configured.' };
   try {
     const ai = getAI();
     const { system, prompt } = sourceAnalysisPrompt(text, kind, currentInputs);
-    const res = await ai.generateJSON<{ kind?: string; profile?: Record<string, unknown>; summary?: unknown; points?: unknown; suggestedMilestones?: unknown }>({ system, prompt, maxTokens: 1400 });
+    const res = await ai.generateJSON<{ kind?: string; profile?: Record<string, unknown>; summary?: unknown; points?: unknown; angles?: unknown; suggestedMilestones?: unknown }>({ system, prompt, maxTokens: 1500 });
     const profile: Record<string, string> = {};
     for (const k of PROFILE_KEYS) {
       const v = res.profile?.[k];
       if (typeof v === 'string' && v.trim()) profile[k] = v.trim().slice(0, 300);
     }
-    const points = Array.isArray(res.points)
-      ? res.points.filter((p) => typeof p === 'string' && p.trim()).map((p) => String(p).slice(0, 400)).slice(0, 8) : [];
+    const strList = (raw: unknown, cap: number) => Array.isArray(raw)
+      ? raw.filter((p) => typeof p === 'string' && p.trim()).map((p) => String(p).slice(0, 400)).slice(0, cap) : [];
     const suggestedMilestones = Array.isArray(res.suggestedMilestones)
       ? [...new Set(res.suggestedMilestones.filter((m): m is string => typeof m === 'string' && MILESTONE_KEYS.includes(m)))] : [];
     return {
       kind: typeof res.kind === 'string' ? res.kind : (kind === 'auto' ? 'note' : kind),
       profile,
       summary: typeof res.summary === 'string' ? res.summary.slice(0, 400) : '',
-      points, suggestedMilestones, provider: ai.name,
+      points: strList(res.points, 8), angles: strList(res.angles, 5), suggestedMilestones, provider: ai.name,
     };
   } catch (e) {
     return { ...empty, provider: 'error', error: (e as Error).message };

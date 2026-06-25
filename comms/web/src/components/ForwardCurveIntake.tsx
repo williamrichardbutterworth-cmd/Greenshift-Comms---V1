@@ -100,7 +100,7 @@ export function ForwardCurveIntake({ onSaved, onCancel }: { onSaved: (s: Forward
           <h2 className="text-lg font-semibold flex items-center gap-2"><LineChart size={18} className="text-brand-greenDark" /> Today’s market data</h2>
           <button className="btn-ghost !px-1.5 !py-1" onClick={requestClose} title="Close"><X size={16} /></button>
         </div>
-        <p className="text-sm text-brand-muted mb-4">Paste this morning’s market report, or drop a screenshot / PDF of it. We’ll read the UK power baseload and NBP gas season tables — check the numbers, then save.</p>
+        <p className="text-sm text-brand-muted mb-4">Paste this morning’s market report, or drop a screenshot / PDF of it. We’ll read the UK power baseload and NBP gas forward-price tables — check the numbers, then save.</p>
 
         {/* Source input */}
         <div className="card p-3 bg-gradient-to-br from-brand-tint to-white mb-4">

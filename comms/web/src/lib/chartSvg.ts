@@ -74,11 +74,12 @@ export function renderLineChartSVG(opts: ChartOptions): string {
   }
 
   // Label every category when there are few; otherwise first / middle / last.
-  const labelEach = isBar || (opts.categoryAxis === true && pts.length <= 8);
+  const labelEach = isBar || (opts.categoryAxis === true && pts.length <= 16);
+  const xFont = labelEach && pts.length > 9 ? 8 : 9.5; // shrink slightly when the axis is busy
   let xLabels = '';
   if (labelEach) {
     xLabels = pts
-      .map((p, i) => `<text x="${(isBar ? xc(i) : x(i)).toFixed(1)}" y="${H - 12}" font-size="9.5" fill="${MUTED}" text-anchor="middle">${fmtX(p.t)}</text>`)
+      .map((p, i) => `<text x="${(isBar ? xc(i) : x(i)).toFixed(1)}" y="${H - 12}" font-size="${xFont}" fill="${MUTED}" text-anchor="middle">${fmtX(p.t)}</text>`)
       .join('');
   } else {
     const xIdx = [0, Math.floor((pts.length - 1) / 2), pts.length - 1];

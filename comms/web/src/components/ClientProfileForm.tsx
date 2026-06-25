@@ -84,7 +84,7 @@ export function ClientProfileForm({ onDone, onCancel, template, initialProfileId
       else if (inputs.companyName?.trim()) { const created = await api.profiles.create({ inputs }).catch(() => null); if (created) clientId = created.id; }
       const docInputs: ReportInputs = {
         ...inputs,
-        ...(template ? { documentTypeId: template.id, documentChannel: template.channel } : {}),
+        ...(template ? { documentTypeId: template.id, documentChannel: template.channel, documentTypeName: template.name, documentSubtitle: template.subtitle, reportKind: template.reportKind } : {}),
         ...(clientId ? { clientProfileId: clientId } : {}),
       };
       const label = template ? template.name : 'report';

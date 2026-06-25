@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, FileText, Mail, Paperclip, Plus, FilePlus2,
-  StickyNote, Phone, ArrowRightCircle, CheckCircle2, Circle, Flag, RefreshCw, Trash2, ExternalLink, Wand2,
+  StickyNote, Phone, ArrowRightCircle, CheckCircle2, Circle, Flag, RefreshCw, Trash2, ExternalLink,
+  Wand2, Lightbulb, Copy, Check, UploadCloud, Pencil,
 } from 'lucide-react';
 import {
-  api, type ClientProfile, type ClientStage, type ClientFile, type ClientActivity, type ActivityType,
+  api, type ClientProfile, type ClientStage, type ClientFile, type ActivityType,
   type SourceKind, type NextStep, type ReportInputs,
 } from '../lib/api';
 import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, relativeTime, stageIndex } from '../lib/crm';
@@ -27,8 +28,9 @@ const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader(); r.onload = () => res((r.result as string).split(',')[1] ?? ''); r.onerror = rej; r.readAsDataURL(file);
 });
 
-// The CRM client hub — everything about one client in one place: stage, tracker,
-// AI next-step, the full dialogue timeline, intake (paste/upload), and documents.
+// The CRM client hub — everything about one client in one place: stage & tracker,
+// an AI next-step, a client-specific "talk track", the dialogue timeline, intake
+// (paste/upload) and a media bank of their documents.
 export function ClientHub({
   clientId, onBack, onStartDocument, onOpenProject,
 }: {
@@ -49,6 +51,7 @@ export function ClientHub({
   const [analyzing, setAnalyzing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
   const editSnapshot = useRef<ReportInputs | null>(null);
 
   const loadFiles = useCallback(() => api.files.list({ clientProfileId: clientId }).then(setFiles).catch(() => {}), [clientId]);
@@ -68,8 +71,23 @@ export function ClientHub({
     loadFiles();
   }, [clientId, loadFiles, recommend]);
 
-  if (err) return <div className="max-w-5xl mx-auto"><button className="btn-ghost mb-3" onClick={onBack}><ArrowLeft size={15} /> Back</button><p className="text-sm text-up">{err}</p></div>;
-  if (!client) return <div className="max-w-5xl mx-auto"><Loader2 className="animate-spin text-brand-green mt-10 mx-auto" size={22} /></div>;
+  // Client-specific "talk track": the conversational angles gathered across all
+  // logged sources, newest first, de-duplicated.
+  const angles = useMemo(() => {
+    const seen = new Set<string>(); const out: string[] = [];
+    for (const a of client?.activities ?? []) {
+      for (const ang of (Array.isArray(a.meta?.angles) ? a.meta!.angles : [])) {
+        if (typeof ang !== 'string') continue;
+        const t = ang.trim(); const k = t.toLowerCase();
+        if (t && !seen.has(k)) { seen.add(k); out.push(t); }
+      }
+      if (out.length >= 8) break;
+    }
+    return out;
+  }, [client]);
+
+  if (err && !client) return <div className="max-w-6xl mx-auto"><button className="btn-ghost mb-3" onClick={onBack}><ArrowLeft size={15} /> Back</button><p className="text-sm text-up" role="alert">{err}</p></div>;
+  if (!client) return <div className="max-w-6xl mx-auto"><Loader2 className="animate-spin text-brand-green mt-10 mx-auto" size={22} /></div>;
 
   const inputs = client.inputs as ReportInputs;
   const docActivities = client.activities.filter((a) => a.type === 'document' && a.meta?.projectId);
@@ -99,7 +117,7 @@ export function ClientHub({
     if (q.milestone && !client.tracker[q.milestone]) await patch({ tracker: { ...client.tracker, [q.milestone]: new Date().toISOString() } });
   };
 
-  // Apply an analysis result: merge new fields, log a timeline entry, set milestones.
+  // Apply an analysis result: merge new fields, capture angles, log a timeline entry, set milestones.
   const applyAnalysis = async (a: Awaited<ReturnType<typeof api.analyzeSource>>, sourceKind: SourceKind) => {
     const mergedInputs: ReportInputs = { ...inputs };
     for (const [k, v] of Object.entries(a.profile)) if (v && !String(mergedInputs[k as keyof ReportInputs] ?? '').trim()) (mergedInputs as Record<string, string>)[k] = v as string;
@@ -107,7 +125,11 @@ export function ClientHub({
     for (const m of a.suggestedMilestones) if (!tracker[m]) tracker[m] = new Date().toISOString();
     await patch({ inputs: mergedInputs, tracker });
     const actType: ActivityType = sourceKind === 'email' ? 'email-received' : sourceKind === 'bill' ? 'file' : sourceKind === 'transcript' ? 'transcript' : 'note';
-    const updated = await logActivity({ type: actType, title: a.summary || 'Update logged', detail: a.points.length ? a.points.map((p) => `• ${p}`).join('\n') : undefined });
+    const updated = await logActivity({
+      type: actType, title: a.summary || 'Update logged',
+      detail: a.points.length ? a.points.map((p) => `• ${p}`).join('\n') : undefined,
+      meta: a.angles?.length ? { angles: a.angles } : undefined,
+    });
     if (updated) recommend(updated);
   };
 
@@ -132,7 +154,7 @@ export function ClientHub({
       if (saved.extractedText.trim()) {
         const a = await api.analyzeSource(saved.extractedText, 'auto', inputs);
         if (a.error && a.provider !== 'claude' && a.provider !== 'openai') setErr(`File uploaded, but analysis was unavailable: ${a.error}`);
-        else await applyAnalysis(a, 'bill');
+        else await applyAnalysis(a, (['transcript', 'email', 'bill'] as const).includes(a.kind as 'transcript' | 'email' | 'bill') ? (a.kind as SourceKind) : 'bill');
       }
     } catch (e) { setErr(String((e as Error).message)); }
     finally { setUploading(false); }
@@ -140,126 +162,163 @@ export function ClientHub({
 
   const removeFile = async (id: string) => { try { await api.files.remove(id); setFiles((f) => f.filter((x) => x.id !== id)); } catch (e) { setErr(String((e as Error).message)); } };
 
+  const copyAngle = async (text: string) => {
+    try { await navigator.clipboard.writeText(text); setCopied(text); setTimeout(() => setCopied((c) => (c === text ? null : c)), 1400); }
+    catch { setErr('Couldn’t copy — select the text and copy manually.'); }
+  };
+
   const setField = (k: keyof ReportInputs, v: string) => setClient((c) => (c ? { ...c, inputs: { ...c.inputs, [k]: v } } : c));
   const startEdit = () => { editSnapshot.current = { ...inputs }; setEditing(true); };
   const cancelEdit = () => { if (editSnapshot.current) setClient((c) => (c ? { ...c, inputs: editSnapshot.current! } : c)); setEditing(false); };
   const saveFields = async () => { await patch({ inputs }); setEditing(false); };
 
+  const stageIdx = stageIndex(client.stage);
+  const railStages = STAGES.filter((s) => s.key !== 'lost');
+
   return (
-    <div className="max-w-6xl mx-auto space-y-5">
+    <div className="max-w-6xl mx-auto space-y-4">
       <button className="btn-ghost !py-1.5 !px-2" onClick={onBack}><ArrowLeft size={15} /> All clients</button>
 
-      {/* Header */}
-      <section className="card p-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex items-start gap-3 min-w-0">
-            <span className="grid place-items-center h-11 w-11 rounded-xl bg-brand-green/10 text-brand-greenDark shrink-0"><Building2 size={20} /></span>
-            <div className="min-w-0">
-              <h2 className="text-xl font-semibold truncate">{client.name}</h2>
-              <div className="flex items-center gap-2 mt-1">
-                <label className="label">Stage</label>
-                <select className="input !py-1 !w-auto text-sm" value={client.stage} onChange={(e) => setStage(e.target.value as ClientStage)}>
-                  {STAGES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                </select>
+      {/* ── Header ── */}
+      <section className="card overflow-hidden">
+        <div className="p-5 bg-gradient-to-br from-brand-tint to-white">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-start gap-3 min-w-0">
+              <span className="grid place-items-center h-12 w-12 rounded-xl bg-brand-green/15 text-brand-greenDark shrink-0"><Building2 size={22} /></span>
+              <div className="min-w-0">
+                <h2 className="text-2xl font-semibold leading-tight truncate">{client.name}</h2>
+                <div className="flex items-center gap-2 mt-1.5 text-sm text-brand-muted">
+                  {inputs.currentSupplier && <span>{inputs.currentSupplier}</span>}
+                  {inputs.contractEnd && <><span className="text-brand-line">·</span><span>ends {inputs.contractEnd}</span></>}
+                  {inputs.consumption && <><span className="text-brand-line">·</span><span>{inputs.consumption}</span></>}
+                </div>
               </div>
             </div>
-          </div>
-          <div className="flex gap-2">
-            {next?.templateId ? (
-              <>
-                <button className="btn-ghost !py-1.5" onClick={() => onStartDocument(client)}><FilePlus2 size={15} /> New document</button>
+            <div className="flex items-center gap-2 shrink-0">
+              <select className="input !py-1.5 !w-auto text-sm" value={client.stage} onChange={(e) => setStage(e.target.value as ClientStage)} title="Pipeline stage">
+                {STAGES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+              </select>
+              {next?.templateId ? (
                 <button className="btn-primary !py-1.5" onClick={() => onStartDocument(client, next.templateId)} title={next.action || 'Create the recommended document'}>
                   <Wand2 size={15} /> Do next step
                 </button>
-              </>
-            ) : (
-              <button className="btn-primary !py-1.5" onClick={() => onStartDocument(client)}><FilePlus2 size={15} /> New document</button>
-            )}
+              ) : (
+                <button className="btn-primary !py-1.5" onClick={() => onStartDocument(client)}><FilePlus2 size={15} /> New document</button>
+              )}
+            </div>
+          </div>
+
+          {/* Stage rail — a segmented progress bar */}
+          <div className="flex gap-1.5 mt-5" role="group" aria-label="Pipeline progress">
+            {railStages.map((s, i) => {
+              const current = i === stageIdx && client.stage !== 'lost';
+              return (
+                <div key={s.key} className="flex-1 min-w-0" aria-current={current ? 'step' : undefined}>
+                  <div className={'h-1.5 rounded-full ' + (i <= stageIdx && client.stage !== 'lost' ? 'bg-brand-green' : 'bg-brand-line')} />
+                  <div className={'text-[10px] mt-1 truncate flex items-center gap-1 ' + (current ? 'text-brand-greenDark font-semibold' : i < stageIdx ? 'text-brand-ink' : 'text-brand-muted')} title={s.label}>
+                    {current && <span className="h-1.5 w-1.5 rounded-full bg-brand-green shrink-0" aria-hidden="true" />}{s.label}
+                  </div>
+                </div>
+              );
+            })}
+            {client.stage === 'lost' && <div className="self-start text-[11px] px-2 py-0.5 rounded-full bg-up/10 text-up">Lost</div>}
           </div>
         </div>
 
-        {/* Stage progress strip */}
-        <div className="flex items-center gap-1 mt-4 overflow-x-auto pb-1">
-          {STAGES.filter((s) => s.key !== 'lost').map((s, i) => {
-            const idx = stageIndex(client.stage);
-            const active = i <= idx && client.stage !== 'lost';
-            return (
-              <div key={s.key} className="flex items-center gap-1 shrink-0">
-                <span className={'text-[11px] px-2 py-0.5 rounded-full ' + (active ? 'bg-brand-green text-white' : 'bg-brand-line/60 text-brand-muted')}>{s.label}</span>
-                {i < STAGES.length - 2 && <span className="text-brand-line">›</span>}
-              </div>
-            );
-          })}
-          {client.stage === 'lost' && <span className="text-[11px] px-2 py-0.5 rounded-full bg-up/10 text-up ml-1">Lost</span>}
-        </div>
-
         {/* Key fields */}
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2 mt-4">
-          {FIELDS.map((f) => (
-            <div key={f.key}>
-              <div className="label">{f.label}</div>
-              {editing ? (
-                <input className="input !py-1 text-sm mt-0.5" value={inputs[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} />
+        <div className="px-5 py-4 border-t border-brand-line">
+          <div className="flex items-center justify-between mb-2">
+            <div className="label">Client details</div>
+            {editing
+              ? <span className="flex gap-2"><button className="btn-primary !py-1 text-xs" onClick={saveFields}>Save</button><button className="btn-ghost !py-1 text-xs" onClick={cancelEdit}>Cancel</button></span>
+              : <button className="text-xs text-brand-greenDark hover:underline inline-flex items-center gap-1" onClick={startEdit}><Pencil size={12} /> Edit</button>}
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2.5">
+            {FIELDS.map((f) => (
+              <div key={f.key}>
+                <div className="text-[11px] uppercase tracking-wide text-brand-muted">{f.label}</div>
+                {editing ? (
+                  <input className="input !py-1 text-sm mt-0.5" value={inputs[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} />
+                ) : (
+                  <div className="text-sm text-brand-ink mt-0.5 truncate" title={inputs[f.key] || ''}>{inputs[f.key] || <span className="text-brand-muted">—</span>}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div className="grid lg:grid-cols-[1fr_320px] gap-4 items-start">
+        {/* ── Main column ── */}
+        <div className="space-y-4 min-w-0">
+          {/* Recommended next step */}
+          <section className="card p-4 bg-gradient-to-br from-brand-tint to-white">
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/15 text-brand-greenDark"><Sparkles size={13} /></span>
+              <h3 className="text-sm font-semibold">Recommended next step</h3>
+              <button className="ml-auto text-brand-muted hover:text-brand-ink" onClick={() => recommend(client)} title="Refresh recommendation" disabled={nextLoading}>
+                <RefreshCw size={13} className={nextLoading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+            {nextLoading ? <p className="text-sm text-brand-muted">Thinking…</p>
+              : next?.action ? (
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{next.action}</p>
+                    {next.rationale && <p className="text-[13px] text-brand-muted mt-0.5 leading-snug">{next.rationale}</p>}
+                  </div>
+                  {next.templateId && (
+                    <button className="btn-primary !py-1.5 text-sm shrink-0" onClick={() => onStartDocument(client, next.templateId)}>
+                      <Wand2 size={14} /> Create this
+                    </button>
+                  )}
+                </div>
               ) : (
-                <div className="text-sm text-brand-ink mt-0.5">{inputs[f.key] || <span className="text-brand-muted">—</span>}</div>
+                <p className="text-sm text-brand-muted">
+                  {next?.provider === 'none' ? 'Recommendations need automatic drafting configured.'
+                    : next?.provider === 'error' ? 'Couldn’t fetch a recommendation — try Refresh.'
+                    : 'No recommendation yet — log some activity below.'}
+                </p>
               )}
-            </div>
-          ))}
-        </div>
-        <div className="mt-3">
-          {editing
-            ? <span className="flex gap-2"><button className="btn-primary !py-1 text-sm" onClick={saveFields}>Save details</button><button className="btn-ghost !py-1 text-sm" onClick={cancelEdit}>Cancel</button></span>
-            : <button className="text-xs text-brand-greenDark hover:underline" onClick={startEdit}>Edit details</button>}
-        </div>
-      </section>
+          </section>
 
-      {/* Next step (AI) */}
-      <section className="card p-5 bg-gradient-to-br from-brand-tint to-white">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="grid place-items-center h-7 w-7 rounded-lg bg-brand-green/15 text-brand-greenDark"><Sparkles size={15} /></span>
-          <h3 className="text-sm font-semibold">Recommended next step</h3>
-          <button className="ml-auto text-brand-muted hover:text-brand-ink" onClick={() => recommend(client)} title="Refresh recommendation" disabled={nextLoading}>
-            <RefreshCw size={14} className={nextLoading ? 'animate-spin' : ''} />
-          </button>
-        </div>
-        {nextLoading ? <p className="text-sm text-brand-muted">Thinking…</p>
-          : next?.action ? (
-            <div>
-              <p className="text-sm font-medium">{next.action}</p>
-              {next.rationale && <p className="text-sm text-brand-muted mt-1">{next.rationale}</p>}
-              {next.templateId && (
-                <button className="btn-primary !py-1.5 text-sm mt-3" onClick={() => onStartDocument(client, next.templateId)}>
-                  <Wand2 size={14} /> Create this
-                </button>
-              )}
-            </div>
-          ) : (
-            <p className="text-sm text-brand-muted">
-              {next?.provider === 'none' ? 'Recommendations need automatic drafting configured.'
-                : next?.provider === 'error' ? 'Couldn’t fetch a recommendation — try Refresh.'
-                : 'No recommendation yet — add some client activity.'}
-            </p>
+          {/* Talk track — client-specific angles */}
+          {angles.length > 0 && (
+            <section className="card p-4">
+              <div className="flex items-center gap-2 mb-2.5">
+                <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/10 text-brand-greenDark"><Lightbulb size={13} /></span>
+                <h3 className="text-sm font-semibold">Talk track</h3>
+                <span className="text-[11px] text-brand-muted">— angles for this client, gathered from your conversations</span>
+              </div>
+              <ul className="space-y-1.5">
+                {angles.map((ang) => (
+                  <li key={ang} className="group flex items-start gap-2 rounded-lg px-2.5 py-2 bg-brand-tint/60 hover:bg-brand-tint transition">
+                    <span className="text-brand-green mt-0.5 shrink-0">›</span>
+                    <span className="text-[13px] leading-snug flex-1">{ang}</span>
+                    <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-greenDark shrink-0 transition" onClick={() => copyAngle(ang)} title="Copy">
+                      {copied === ang ? <Check size={13} className="text-brand-green" /> : <Copy size={13} />}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
           )}
-      </section>
 
-      <div className="grid lg:grid-cols-[1fr_320px] gap-5 items-start">
-        {/* Left: intake + timeline */}
-        <div className="space-y-5 min-w-0">
-          {/* Intake */}
+          {/* Log an update */}
           <section className="card p-4">
             <div className="flex items-center gap-2 mb-2">
               <h3 className="text-sm font-semibold">Log an update</h3>
-              <span className="text-[11px] text-brand-muted">Paste a transcript, email or bill — it’s analysed, filed and used to update the client.</span>
+              <span className="text-[11px] text-brand-muted">— paste a transcript, email or bill; it’s read, filed and used to update the client</span>
             </div>
             <div className="flex gap-2 mb-2">
               {(['transcript', 'email', 'bill'] as SourceKind[]).map((k) => (
                 <button key={k} onClick={() => setIntakeKind(k)} aria-pressed={intakeKind === k} className={'text-xs px-2.5 py-1 rounded-lg border capitalize transition ' + (intakeKind === k ? 'border-brand-green bg-brand-tint text-brand-ink font-medium' : 'border-brand-line text-brand-muted hover:text-brand-ink')}>{k}</button>
               ))}
             </div>
-            <textarea className="input min-h-[90px] text-sm" placeholder="Paste the transcript / email / bill text here…" value={intakeText} onChange={(e) => setIntakeText(e.target.value)} />
+            <textarea className="input min-h-[84px] text-sm" placeholder="Paste the transcript / email / bill text here…" value={intakeText} onChange={(e) => setIntakeText(e.target.value)} />
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <button className="btn-primary !py-1.5 text-sm" onClick={analyzePasted} disabled={analyzing || !intakeText.trim()}>
-                {analyzing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} {analyzing ? 'Analysing…' : 'Analyse & log'}
+                {analyzing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} {analyzing ? 'Reading…' : 'Read & log'}
               </button>
               <label className="btn-ghost !py-1.5 text-sm cursor-pointer">
                 {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />} Upload document
@@ -275,15 +334,17 @@ export function ClientHub({
           {/* Timeline */}
           <section className="card p-4">
             <h3 className="text-sm font-semibold mb-3">Activity timeline</h3>
-            <ol className="space-y-3">
-              {client.activities.map((a) => {
+            <ol className="relative">
+              {client.activities.map((a, i) => {
                 const Icon = ACTIVITY_ICON[a.type] ?? StickyNote;
                 const isDoc = a.type === 'document' && !!a.meta?.projectId;
+                const last = i === client.activities.length - 1;
                 return (
-                  <li key={a.id} className="flex gap-3">
-                    <span className="grid place-items-center h-7 w-7 rounded-full bg-brand-tint text-brand-greenDark shrink-0 mt-0.5"><Icon size={13} /></span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
+                  <li key={a.id} className="relative flex gap-3 pb-4 last:pb-0">
+                    {!last && <span className="absolute left-[13px] top-7 bottom-0 w-px bg-brand-line" aria-hidden="true" />}
+                    <span className="grid place-items-center h-[26px] w-[26px] rounded-full bg-brand-tint text-brand-greenDark shrink-0 ring-2 ring-white z-[1]"><Icon size={13} /></span>
+                    <div className="min-w-0 flex-1 pt-0.5">
+                      <div className="flex items-baseline gap-2">
                         {isDoc ? (
                           <button type="button" className="text-sm text-left text-brand-greenDark hover:underline font-medium" onClick={() => onOpenProject(String(a.meta!.projectId))}>
                             {a.title}<ExternalLink size={11} className="inline ml-1 -mt-0.5" />
@@ -293,26 +354,27 @@ export function ClientHub({
                         )}
                         <span className="text-[11px] text-brand-muted ml-auto shrink-0">{relativeTime(a.at)}</span>
                       </div>
-                      {a.detail && <p className="text-xs text-brand-muted mt-0.5 whitespace-pre-line">{a.detail}</p>}
+                      {a.detail && <p className="text-xs text-brand-muted mt-1 whitespace-pre-line leading-relaxed">{a.detail}</p>}
                     </div>
                   </li>
                 );
               })}
-              {!client.activities.length && <li className="text-sm text-brand-muted">No activity yet.</li>}
+              {!client.activities.length && <li className="text-sm text-brand-muted">No activity yet — log an update above.</li>}
             </ol>
           </section>
         </div>
 
-        {/* Right: tracker + documents/files */}
-        <div className="space-y-5">
+        {/* ── Side column ── */}
+        <div className="space-y-4">
+          {/* Tracker */}
           <section className="card p-4">
             <h3 className="text-sm font-semibold mb-3">Tracker</h3>
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               {MILESTONES.map((m) => {
                 const done = !!client.tracker[m.key];
                 return (
-                  <button key={m.key} onClick={() => toggleMilestone(m.key)} className="flex items-center gap-2 w-full text-left text-sm group">
-                    {done ? <CheckCircle2 size={16} className="text-brand-green shrink-0" /> : <Circle size={16} className="text-brand-line group-hover:text-brand-muted shrink-0" />}
+                  <button key={m.key} onClick={() => toggleMilestone(m.key)} className="flex items-center gap-2.5 w-full text-left text-sm group rounded-md px-1.5 py-1 hover:bg-brand-tint/60 transition">
+                    {done ? <CheckCircle2 size={17} className="text-brand-green shrink-0" /> : <Circle size={17} className="text-brand-line group-hover:text-brand-muted shrink-0" />}
                     <span className={done ? 'text-brand-ink' : 'text-brand-muted'}>{m.label}</span>
                     {done && client.tracker[m.key] && <span className="text-[10px] text-brand-muted ml-auto">{new Date(client.tracker[m.key] as string).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>}
                   </button>
@@ -321,34 +383,51 @@ export function ClientHub({
             </div>
           </section>
 
+          {/* Media bank */}
           <section className="card p-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold">Documents &amp; files</h3>
+              <h3 className="text-sm font-semibold">Documents &amp; media</h3>
               <button className="text-xs text-brand-greenDark hover:underline inline-flex items-center gap-1" onClick={() => onStartDocument(client)}><Plus size={12} /> New</button>
             </div>
-            <div className="space-y-1.5">
-              {docActivities.map((a) => (
-                <button key={a.id} className="flex items-center gap-2 w-full text-left text-sm hover:bg-brand-tint rounded px-1 py-0.5" onClick={() => onOpenProject(String(a.meta!.projectId))}>
-                  <FileText size={13} className="text-brand-greenDark shrink-0" />
-                  <span className="flex-1 truncate">{a.title.replace(/^Created /, '')}</span>
-                  <ExternalLink size={12} className="text-brand-muted shrink-0" />
-                </button>
-              ))}
+
+            {docActivities.length > 0 && (
+              <div className="mb-3">
+                <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">Generated reports</div>
+                <div className="space-y-1">
+                  {docActivities.map((a) => (
+                    <button key={a.id} className="flex items-center gap-2 w-full text-left text-sm hover:bg-brand-tint rounded-md px-1.5 py-1 transition" onClick={() => onOpenProject(String(a.meta!.projectId))}>
+                      <span className="grid place-items-center h-6 w-6 rounded bg-brand-tint text-brand-greenDark shrink-0"><FileText size={12} /></span>
+                      <span className="flex-1 truncate">{a.title.replace(/^Created /, '')}</span>
+                      <ExternalLink size={12} className="text-brand-muted shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">Client files</div>
+            <div className="space-y-1 mb-2">
               {files.map((f) => (
-                <div key={f.id} className="group flex items-center gap-2 text-sm">
-                  <Paperclip size={13} className="text-brand-muted shrink-0" />
+                <div key={f.id} className="group flex items-center gap-2 text-sm rounded-md px-1.5 py-1 hover:bg-brand-tint/60 transition">
+                  <span className="grid place-items-center h-6 w-6 rounded bg-brand-line/50 text-brand-muted shrink-0"><Paperclip size={12} /></span>
                   <a href={api.files.downloadUrl(f.id)} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-brand-green" title={f.name}>{f.name}</a>
-                  {f.extractedText && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0">read</span>}
-                  <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0" onClick={() => removeFile(f.id)} title="Remove"><Trash2 size={12} /></button>
+                  {f.extractedText && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0" title="Text read for context & reports">read</span>}
+                  <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0 transition" onClick={() => removeFile(f.id)} title="Remove"><Trash2 size={12} /></button>
                 </div>
               ))}
-              {!docActivities.length && !files.length && <p className="text-xs text-brand-muted">No documents or files yet.</p>}
+              {!files.length && <p className="text-xs text-brand-muted">No files yet.</p>}
             </div>
+
+            <label className="btn-ghost w-full cursor-pointer justify-center !py-1.5 text-sm">
+              {uploading ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />} Upload a document
+              <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAndAnalyze(f); e.target.value = ''; }} />
+            </label>
+            <p className="text-[11px] text-brand-muted mt-1.5">Bills, LOAs &amp; notes are stored here, read for client intel, and can be inserted into any report you build for them.</p>
           </section>
         </div>
       </div>
 
-      {err && <p className="text-sm text-up">{err}</p>}
+      {err && <p className="text-sm text-up" role="alert">{err}</p>}
     </div>
   );
 }

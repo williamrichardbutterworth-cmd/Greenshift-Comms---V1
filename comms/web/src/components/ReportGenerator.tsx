@@ -158,7 +158,18 @@ export function ReportGenerator() {
 
   // ── Project lifecycle ──
   const resetTransient = () => { setSnapshot(null); setProvider(''); setShowVersions(false); setErr(null); setFiles([]); setRefQuery(''); };
-  const loadFiles = (projectId: string) => api.files.list({ projectId }).then(setFiles).catch(() => setFiles([]));
+  // Load the project's own files AND the linked client's media bank (deduped), so
+  // a client's bills/LOAs/notes can be inserted into any report built for them.
+  const loadFiles = (project: { id: string; inputs?: ReportInputs }) => {
+    const cid = (project.inputs as ReportInputs | undefined)?.clientProfileId;
+    Promise.all([
+      api.files.list({ projectId: project.id }).catch(() => [] as ClientFile[]),
+      cid ? api.files.list({ clientProfileId: cid }).catch(() => [] as ClientFile[]) : Promise.resolve([] as ClientFile[]),
+    ]).then(([pf, cf]) => {
+      const seen = new Set<string>();
+      setFiles([...pf, ...cf].filter((f) => (seen.has(f.id) ? false : (seen.add(f.id), true))));
+    }).catch(() => setFiles([]));
+  };
 
   // Start the new-document flow (optionally pre-selecting a client).
   const startNew = (profileId?: string) => { setPickProfileId(profileId); setPendingTemplate(null); setPicking(true); };
@@ -179,14 +190,14 @@ export function ReportGenerator() {
     dirty.current = false;
     setCreating(false); setPendingTemplate(null); setPickProfileId(undefined);
     setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
-    resetTransient(); restoreContext(p.context); loadFiles(p.id); refreshProjects();
+    resetTransient(); restoreContext(p.context); loadFiles(p); refreshProjects();
   };
   const openProject = async (id: string) => {
     try {
       const p = await api.projects.get(id);
       dirty.current = false;
       setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
-      resetTransient(); restoreContext(p.context); loadFiles(p.id);
+      resetTransient(); restoreContext(p.context); loadFiles(p);
     } catch (e) { setErr(String((e as Error).message)); }
   };
   // Back to the overview — flush any pending autosave first.
@@ -346,7 +357,7 @@ export function ReportGenerator() {
           for (const s of sources) if (s.attribution && !attributions.includes(s.attribution)) attributions.push(s.attribution);
         }
       }
-      const meta = { asOf: snapshot?.asOf, attributions };
+      const meta = { asOf: snapshot?.asOf, attributions, reportTitle: inputs.documentTypeName, reportSubtitle: inputs.documentSubtitle, reportKind: inputs.reportKind };
       const exp = await import('../lib/exportReport');
       const { blob, filename } = fmt === 'pdf' ? await exp.exportReportPdf(inputs, liveDoc, meta) : await exp.exportReportDocx(inputs, liveDoc, meta);
       const url = URL.createObjectURL(blob);
@@ -368,7 +379,8 @@ export function ReportGenerator() {
   // any data block that was inserted so nothing silently vanishes from the email.
   const EMBED_LABEL: Record<string, string> = {
     metricsTable: '[Market data table]', priceChart: '[Price chart]', customChart: '[Chart]',
-    gridMap: '[Generation map]', newsList: '[Supporting evidence]',
+    gridMap: '[Generation map]', newsList: '[Supporting evidence]', kpiStrip: '[Headline figures]',
+    comparisonTable: '[Quote comparison]', forwardCurve: '[Procurement timing]',
   };
   const nodeText = (n: DocNode): string =>
     n.type === 'text' ? n.text ?? '' : n.type === 'hardBreak' ? '\n' : (n.content ?? []).map(nodeText).join('');
@@ -378,6 +390,12 @@ export function ReportGenerator() {
       .map((n) => {
         if (n.type === 'bulletList') return (n.content ?? []).map((li) => '- ' + nodeText(li).trim()).join('\n');
         if (n.type === 'orderedList') return (n.content ?? []).map((li, i) => `${i + 1}. ${nodeText(li).trim()}`).join('\n');
+        // The recommendation box carries real prose (the central message) — keep it.
+        if (n.type === 'recommendationBox') {
+          const d = n.attrs?.data as { text?: string; label?: string } | undefined;
+          const t = (d?.text ?? '').trim();
+          return t ? `${d?.label || 'Our recommendation'}: ${t}` : '';
+        }
         if (n.type in EMBED_LABEL) return EMBED_LABEL[n.type];
         return nodeText(n);
       })
@@ -588,15 +606,21 @@ export function ReportGenerator() {
                 <div className="label mb-1">Files &amp; media</div>
                 {files.length > 0 && (
                   <div className="space-y-0.5 max-h-36 overflow-auto pr-1 mb-2">
-                    {files.map((f) => (
-                      <div key={f.id} draggable onDragStart={dragRef('file', f.id)} className="group flex items-center gap-1.5 text-xs py-0.5 cursor-grab">
-                        <FileText size={12} className="text-brand-muted shrink-0" />
-                        <span className="flex-1 truncate" title={f.name}>{f.name}</span>
-                        {f.extractedText && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0">ctx</span>}
-                        <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-green shrink-0" onClick={() => insertFile(f)} title="Insert into report"><Plus size={13} /></button>
-                        <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0" onClick={() => removeUpload(f.id)} title="Remove"><Trash2 size={12} /></button>
-                      </div>
-                    ))}
+                    {files.map((f) => {
+                      // A file from the client's media bank (not this report) must not be
+                      // hard-deleted here — that would destroy the client's source document.
+                      const clientFile = f.projectId !== current.id;
+                      return (
+                        <div key={f.id} draggable onDragStart={dragRef('file', f.id)} className="group flex items-center gap-1.5 text-xs py-0.5 cursor-grab">
+                          <FileText size={12} className="text-brand-muted shrink-0" />
+                          <span className="flex-1 truncate" title={f.name}>{f.name}</span>
+                          {clientFile && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0" title="From this client’s media bank">client</span>}
+                          {f.extractedText && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0">ctx</span>}
+                          <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-green shrink-0" onClick={() => insertFile(f)} title="Insert into report"><Plus size={13} /></button>
+                          {!clientFile && <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0" onClick={() => removeUpload(f.id)} title="Remove"><Trash2 size={12} /></button>}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
                 <label className="btn-ghost w-full cursor-pointer justify-center !py-1.5 text-sm">

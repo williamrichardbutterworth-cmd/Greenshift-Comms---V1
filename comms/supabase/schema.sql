@@ -164,3 +164,9 @@ create table if not exists public.forward_curves (
 );
 create index if not exists forward_curves_asof_idx on public.forward_curves (as_of_date desc, created_at desc);
 alter table public.forward_curves enable row level security;
+
+-- Report-system upgrade: templates gain a kind tag (drives the exported
+-- letterhead subtitle + disclaimer set) and a cover subtitle. Idempotent so an
+-- existing document_templates table picks them up on re-run.
+alter table public.document_templates add column if not exists report_kind text;
+alter table public.document_templates add column if not exists subtitle    text;

@@ -69,7 +69,9 @@ export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientPro
     for (const [k, v] of Object.entries(a.profile)) if (v && !String(mergedInputs[k as keyof ReportInputs] ?? '').trim()) (mergedInputs as Record<string, string>)[k] = v as string;
     const cur = await api.profiles.update(clientId, { inputs: mergedInputs, ...(Object.keys(tracker).length ? { tracker } : {}) }).catch(() => null);
     const updated = await api.profiles.addActivity(clientId, {
-      type: kindToActivity(sourceKind), title: a.summary || 'Intake logged', detail: a.points.length ? a.points.map((p) => `• ${p}`).join('\n') : undefined,
+      type: kindToActivity(sourceKind), title: a.summary || 'Intake logged',
+      detail: a.points.length ? a.points.map((p) => `• ${p}`).join('\n') : undefined,
+      meta: a.angles?.length ? { angles: a.angles } : undefined,
     }).catch(() => null);
     return updated ?? cur;
   };

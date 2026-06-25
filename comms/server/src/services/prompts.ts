@@ -12,9 +12,11 @@ consultancy and third-party intermediary. Your audience is our own sales agents
 electricity procurement.
 
 Hard rules:
-- Use ONLY the data and headlines provided. Never invent figures, prices or events.
-- Treat all prices as indicative/for-information, not a price quotation.
-- This is general market commentary, NOT financial advice.
+- Use ONLY the data and headlines provided. Never invent figures, prices or events. If a figure isn't provided, don't state one.
+- Treat all prices as indicative/for-information, not a price quotation. Never present an indicative level as a firm quote.
+- This is general market commentary, NOT financial advice, and not a personal recommendation to buy or sell.
+- Distinguish OBSERVED data (live/settled market prices we measured) from MODELLED/forward views (the forward curve, scenarios, outlooks) — never present a forecast as a fact.
+- Use measured, hedged language: prefer "indicative", "suggests", "currently points to", "on the basis of [dated] data", "may", "could". Avoid "will", "guaranteed", "best price", or "you should buy/sell". Frame a market read as something the client may wish to consider.
 - Plain, confident English a non-expert business owner can follow. UK spelling.
 - Be concise. No hype, no emojis.`;
 
@@ -125,6 +127,8 @@ function refList(ctx: AssembleContext): string[] {
   refs.push('"chart:brent:12m" — a price-trend chart (series may be brent|gas|power; range may be 3m|6m|12m)');
   refs.push('"generationMap" — a UK map of regional grid carbon intensity + live interconnector flows (use at most once, where grid/sustainability context helps)');
   refs.push('"forwardCurve" — the UK power baseload + NBP gas forward season curves with the backwardation / "procure now vs wait" read (use where procurement timing is the point)');
+  refs.push('"kpiStrip" — a compact 3-4 card "at a glance" strip of the headline market numbers (day-ahead power, gas, forward read); use once near the top');
+  refs.push('"comparisonTable" — a side-by-side comparison of the supplier quotes / options the agent has gathered (the agent fills the figures; never invent them)');
   if (ctx.selectedNews?.length) refs.push('"selectedNews" — the attached news headlines, as a bulleted list');
   (ctx.customCharts ?? []).forEach((c) => refs.push(`"customChart:${c.id}" — the agent's own chart titled "${c.title}"`));
   return refs;
@@ -311,10 +315,11 @@ Return ONLY JSON in exactly this shape:
   "kind": "transcript|bill|email",
   "profile": { "companyName": "", "clientName": "", "contact": "", "sites": "", "currentSupplier": "", "contractEnd": "", "consumption": "" },
   "summary": "one concise sentence describing what this source is and the single most important takeaway, suitable for a CRM timeline entry",
-  "points": ["a concise, useful point actually stated — a goal, figure, pain point, renewal driver or objection"],
+  "points": ["a concise, useful FACT actually stated — a goal, figure, pain point, renewal driver or objection"],
+  "angles": ["a client-specific CONVERSATIONAL ANGLE the agent can use to build the relationship and move the deal forward on the next call — e.g. a hook tied to something they said, a concern to pre-empt, a follow-up to raise, a value point that matters to THIS client. Actionable and personal, not generic market commentary."],
   "suggestedMilestones": ["zero or more of: billReceived, loaSent, loaReturned, quotesGathered, proposalSent, signed — ONLY if the source clearly evidences that milestone (e.g. an attached/described bill -> billReceived; a signed LOA -> loaReturned)"]
 }
-Leave any profile field as an empty string if not clearly stated. For 'consumption' include units (e.g. "450,000 kWh/yr"). Provide 0-8 points. Plain UK English.`,
+Leave any profile field as an empty string if not clearly stated. For 'consumption' include units (e.g. "450,000 kWh/yr"). Provide 0-8 points and 0-5 angles. Base angles ONLY on this source and the known client details — never invent. Plain UK English.`,
   };
 }
 

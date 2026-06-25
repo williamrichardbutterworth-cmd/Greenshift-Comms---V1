@@ -85,6 +85,10 @@ export interface ReportInputs {
   /** Which document template this project was created from (persisted on the project). */
   documentTypeId?: string;
   documentChannel?: 'document' | 'email';
+  /** Report identity stamped from the template at creation → drives the export cover. */
+  documentTypeName?: string;
+  documentSubtitle?: string;
+  reportKind?: string;
   /** The client this document belongs to (links a project back to its CRM record). */
   clientProfileId?: string;
 }
@@ -102,6 +106,8 @@ export interface DocumentTemplate {
   description: string;
   channel: 'document' | 'email';
   icon?: string;
+  reportKind?: string;
+  subtitle?: string;
   guidance: string;
   sections: TemplateSection[];
   builtin: boolean;
@@ -112,6 +118,8 @@ export interface NewTemplate {
   description?: string;
   channel?: 'document' | 'email';
   icon?: string;
+  reportKind?: string;
+  subtitle?: string;
   guidance?: string;
   sections?: TemplateSection[];
 }
@@ -140,7 +148,25 @@ export interface PriceSeries {
 export interface MetricRow { label: string; value: number | string | null; unit: string; changePct?: number | null; }
 export interface ChartData { series: SeriesKey; label: string; unit: string; range: RangeKey; points: SeriesPoint[]; sourceName?: string; }
 export interface NewsRef { source: string; title: string; url?: string; }
-export interface ReportMeta { asOf?: string; attributions?: string[]; }
+export interface ReportMeta {
+  asOf?: string;
+  attributions?: string[];
+  /** Report identity for the exported cover/letterhead (falls back to the market-report defaults). */
+  reportTitle?: string;
+  reportSubtitle?: string;
+  reportKind?: string;
+}
+
+// ── KPI strip (compact "at a glance" headline numbers) ──
+export interface KpiCard { label: string; value: string; unit?: string; delta?: number | null; tone?: 'up' | 'down' | 'flat' | 'accent'; }
+export interface KpiStripData { cards: KpiCard[]; asOf?: string; note?: string; }
+
+// ── Supplier / scenario comparison table (agent-filled) ──
+export interface ComparisonRow { option: string; unitRate?: string; standingCharge?: string; term?: string; annualCost?: string; green?: boolean; recommended?: boolean; }
+export interface ComparisonTableData { rows: ComparisonRow[]; caption?: string; }
+
+// ── Recommendation box (styled verdict block; AI-written text) ──
+export interface RecommendationBoxData { text: string; label?: string; }
 
 // ── Report document (TipTap / ProseMirror JSON) ──
 // Loose structural types so the exporter & doc-builder can walk the document
@@ -248,6 +274,8 @@ export interface TranscriptExtract { profile: Partial<ReportInputs>; points: str
 export type SourceKind = 'transcript' | 'bill' | 'email' | 'auto';
 export interface SourceAnalysis {
   kind: string; profile: Partial<ReportInputs>; summary: string; points: string[];
+  /** Client-specific conversational angles/hooks for the next call. */
+  angles: string[];
   suggestedMilestones: string[]; provider: string; error?: string;
 }
 export interface NextStep { action: string; rationale: string; templateId: string; provider: string; error?: string; }

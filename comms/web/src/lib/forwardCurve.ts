@@ -35,6 +35,36 @@ export function termLegs(curve: CommodityCurve): CurveLeg[] {
   return curve.legs.filter((l) => !/^da$/i.test(l.label) && legValue(l) != null);
 }
 
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const yr4 = (y: string) => { const n = parseInt(y, 10); return n < 100 ? n + 2000 : n; };
+
+// A single ladder ordering for any contract label so the curve always reads
+// near → far: day-ahead, then months, then quarters, then seasons (the order a
+// market report lists them and the screenshot shows). 1e6 tier gaps keep the
+// tiers strictly separated regardless of how the extractor ordered the rows.
+export function legOrderKey(label: string): number {
+  const l = label.trim();
+  if (/^da$/i.test(l)) return 0;
+  const m = l.match(/^([a-z]{3})[\s-]?'?\s*(\d{2,4})$/i);
+  if (m && MONTHS.includes(m[1].toLowerCase())) return 1_000_000 + yr4(m[2]) * 12 + MONTHS.indexOf(m[1].toLowerCase());
+  const q = l.match(/^q([1-4])[\s-]?'?\s*(\d{2,4})$/i);
+  if (q) return 2_000_000 + yr4(q[2]) * 4 + parseInt(q[1], 10);
+  const s = seasonSortKey(l);
+  if (s !== null) return 3_000_000 + s;
+  return 2_500_000; // unknown granularity → between quarters and seasons, stable
+}
+
+// Every priced contract on the curve (DA, months, quarters, seasons) for the
+// CHART, sorted into one near→far ladder so the curve's far end is genuinely the
+// furthest contract (the seasonal strip still drives the backwardation read via
+// termLegs/analyzeCurve).
+export function chartLegs(curve: CommodityCurve): CurveLeg[] {
+  return curve.legs
+    .filter((l) => legValue(l) != null)
+    .slice()
+    .sort((a, b) => legOrderKey(a.label) - legOrderKey(b.label));
+}
+
 export interface CurveAnalysis {
   terms: CurveLeg[];
   front: CurveLeg;
@@ -122,8 +152,10 @@ export function forwardCurveChartOptions(
   curve: CommodityCurve,
   opts: { width?: number; height?: number; field?: 'value' | 'latest' } = {},
 ): ChartOptions {
-  const terms = termLegs(curve);
-  const points = terms.map((l) => ({ t: l.label, v: (opts.field === 'latest' ? l.latest : legValue(l)) ?? NaN }));
+  const legs = chartLegs(curve);
+  const points = legs
+    .map((l) => ({ t: l.label, v: (opts.field === 'latest' ? l.latest : legValue(l)) ?? NaN }))
+    .filter((p) => Number.isFinite(p.v)); // never let a null-on-this-field leg desync the axis
   return {
     points,
     title: `${commodityLabel(curve.commodity)} — forward curve`,

@@ -151,7 +151,7 @@ export function ForwardCurvePanel() {
         <LineChart size={28} className="mx-auto mb-3 text-brand-green opacity-70" />
         <h3 className="text-base font-semibold">Forward curve &amp; procurement timing</h3>
         <p className="text-sm text-brand-muted mt-1 mb-4 max-w-md mx-auto">
-          Capture this morning’s market report — paste it or drop a screenshot. We’ll read the UK power baseload and NBP gas season curves and show, in one view, whether buying ahead is cheaper.
+          Capture this morning’s market report — paste it or drop a screenshot. We’ll read the UK power baseload and NBP gas forward curves and show, in one view, whether buying ahead is cheaper.
         </p>
         <button className="btn-primary mx-auto" onClick={() => setEditing(true)}><LineChart size={16} /> Add today’s market data</button>
       </section>
