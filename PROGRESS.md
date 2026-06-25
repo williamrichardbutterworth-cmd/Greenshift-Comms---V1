@@ -28,21 +28,22 @@
 | `10c24f9` | Smoother client-creation flow + client-first overview |
 | `82202a1` | Forward-curve procurement engine — paste/screenshot → vision extract → backwardation read + client report bridge |
 | `d78e59d` | Report engine (dynamic identity, KPI/recommendation/comparison blocks, evidence/disclaimer layer, 4 UK report templates) + revamped client view (stage rail, **talk-track angles**, media bank) + forward curve plots **every** contract |
+| `1de5794` | Document-builder overhaul — insert-at-cursor, grouped **Insert ▾** menu, **Outline ▾** jump-nav, live word/page count, zoom 60–140%, menus hidden on email surface (adversarial-reviewed, 8 findings fixed) |
+| `__HASH__` | Angles/conversations → report — one-click **Draft follow-up** from the talk track (seeds a post-call-followup email with the client's angles) + **Past conversations** tray that grounds any draft in selected timeline entries (summary/points/angles fed as prompt context). Browser-verified end-to-end. **No schema change.** |
 
 ---
 
 ## Ready to push 🟡
 
-- [ ] **Document-builder overhaul** — `comms/web/src/editor/CommsEditor.tsx` (1 file, uncommitted): insert-at-cursor + grouped **Insert ▾** menu, **Outline ▾** jump-nav, live word/page count, zoom 60–140%, menus hidden on email surface. Adversarial-reviewed (8 findings fixed: outside-click/Escape dismiss + mutual exclusivity; NodeSelection insert position; page-count vs zoom; stale counts on doc-swap; async menu close; outline key). Gates green, browser-verified. → `git commit` + push.
+- _(nothing in flight)_
 
 ---
 
 ## Next up ⬜ (user-chosen, in order)
 
-1. [ ] **Angles/conversations → report** — one-click "draft a follow-up from these talk-track angles"; insert a past conversation/summary into the current report as context ("link old conversations"). Hooks: `ClientHub` angles live in `activity.meta.angles`; report assemble; studio context tray.
-2. [ ] **Pipeline + needs-attention** — cross-client board by stage (`STAGES` in `lib/crm.ts`); a "contracts ending < N months with no renewal milestone" list that auto-suggests the Renewal / Out-of-contract templates (reuse `recommendNextStep` plumbing + `templateId` mapping).
-3. [ ] **Richer media bank** — image/PDF thumbnails, drag a client bill onto the report page, in-app preview. (`fileStore` + `ClientHub` media bank + studio `loadFiles` merge already exist.)
-4. [ ] **Bill OCR → auto-fill** — vision extraction of uploaded energy bills (supplier, MPAN, rates, consumption, end date) → auto-fill the client + pre-fill the comparison table. Pattern: `extractForwardCurve` vision flow; note `fileStore` does NOT OCR images, so send the image to the model.
+1. [ ] **Pipeline + needs-attention** — cross-client board by stage (`STAGES` in `lib/crm.ts`); a "contracts ending < N months with no renewal milestone" list that auto-suggests the Renewal / Out-of-contract templates (reuse `recommendNextStep` plumbing + `templateId` mapping).
+2. [ ] **Richer media bank** — image/PDF thumbnails, drag a client bill onto the report page, in-app preview. (`fileStore` + `ClientHub` media bank + studio `loadFiles` merge already exist.)
+3. [ ] **Bill OCR → auto-fill** — vision extraction of uploaded energy bills (supplier, MPAN, rates, consumption, end date) → auto-fill the client + pre-fill the comparison table. Pattern: `extractForwardCurve` vision flow; note `fileStore` does NOT OCR images, so send the image to the model.
 
 ---
 
@@ -56,12 +57,13 @@
 
 ## Key files map
 - **Forward curve**: server `services/forwardCurveStore.ts`, `routes/forwardCurve.ts`; web `lib/forwardCurve.ts` (`analyzeCurve`/`curveSignal`/`legOrderKey`/`chartLegs`), `components/ForwardCurvePanel.tsx`, `ForwardCurveIntake.tsx`, `editor/nodes/ForwardCurve.tsx`.
-- **Report engine**: server `services/templatesStore.ts` (reportKind/subtitle, `refreshBuiltins`, 7 seeds), `prompts.ts` (HOUSE_RULES hedged; `forwardCurveExtractPrompt`; `sourceAnalysisPrompt` returns `angles`), `reportGenerator.ts`; web `lib/exportReport.ts` (dynamic identity, figure captions, `allDisclaimers`), `lib/buildDocFromSections.ts`, `editor/nodes/{KpiStrip,RecommendationBox,ComparisonTable}.tsx`, `editor/CommsEditor.tsx`.
-- **CRM**: server `services/clientProfilesStore.ts`; web `components/ClientHub.tsx` (talk track + media bank), `ClientCreate.tsx`, `ReportGenerator.tsx` (`loadFiles` merges client files).
+- **Report engine**: server `services/templatesStore.ts` (reportKind/subtitle, `refreshBuiltins`, 7 seeds), `prompts.ts` (HOUSE_RULES hedged; `forwardCurveExtractPrompt`; `sourceAnalysisPrompt` returns `angles`; `AssembleContext.linkedConversations` + `contextBlock` append), `reportGenerator.ts`; web `lib/exportReport.ts` (dynamic identity, figure captions, `allDisclaimers`), `lib/buildDocFromSections.ts`, `editor/nodes/{KpiStrip,RecommendationBox,ComparisonTable}.tsx`, `editor/CommsEditor.tsx`.
+- **CRM**: server `services/clientProfilesStore.ts`; web `components/ClientHub.tsx` (talk track + **Draft follow-up** button + media bank), `ClientCreate.tsx`, `ClientProfileForm.tsx` (`seedAngles` → folds into the project's `agentNotes`, never the durable profile), `ReportGenerator.tsx` (`loadFiles` merges client files; `loadConvos` + **Past conversations** tray → `assemble()` payload `linkedConversations`; selection persisted via `buildContext`/`restoreContext`).
 
 ## ⚠️ Correctness invariants (don't regress)
 - **Backwardation = curve SLOPE** (`furthest < front`), NEVER a single cheap interior leg. `curveSignal()` (`backwardation|value|contango`) drives panel chrome + headline + exported narrative *together*.
 - Forward chart plots all contracts via `chartLegs` sorted by `legOrderKey` (DA < months < quarters < seasons); the seasonal strip still drives the backwardation read.
 - Client-bank files shown in the report studio are badged "client" and protected from destructive delete (deleting there would destroy the client's source doc app-wide).
 - A doc's "Our recommendation" text section is auto-routed into a `recommendationBox`; data blocks are gated off the email surface; `emailText()` preserves recommendation prose.
+- **Linked conversations + handed-off angles are PROMPT TEXT only** — fed via `contextBlock` ("restate or build on these, do NOT invent beyond them") / `agentNotes`, never an embed `ref`, so `VALID_REF`/`sanitiseSections` are untouched and no figure can be echoed as a firm price. `assemble()` reads LIVE tray state (not the persisted `ContextItem[]`), so any new context channel must be wired into BOTH the `assemble()` payload AND `buildContext`/`restoreContext`. The conversations tray is read-only (never mutates `profile.activities`).
 </content>

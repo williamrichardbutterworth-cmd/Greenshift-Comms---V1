@@ -3,12 +3,15 @@ import type { Editor } from '@tiptap/react';
 import {
   Sparkles, Download, FileText, Trash2, FilePlus2, History, Save, FolderOpen, Pencil, RotateCcw,
   Paperclip, Loader2, ChevronDown, Building2, Library, PenLine, Link2, Plus, LayoutGrid, Search, Bookmark, Copy,
+  MessagesSquare, Phone, Mail, StickyNote,
 } from 'lucide-react';
 import {
   api, EMPTY_DOC,
   type NewsItem, type ReportInputs, type MarketSnapshot, type ReportDoc, type ContextItem,
   type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle, type DocNode, type NewActivity,
+  type ClientActivity, type ActivityType,
 } from '../lib/api';
+import { relativeTime } from '../lib/crm';
 import { CommsEditor } from '../editor/CommsEditor';
 import { PageOverview } from '../editor/PageOverview';
 import { ClientProfileForm } from './ClientProfileForm';
@@ -39,6 +42,14 @@ const DRAFT_STAGES = [
   'Building your document…',
 ];
 
+// Timeline entries that read as "conversations" — the ones worth grounding a draft in.
+const CONVO_TYPES = new Set<ActivityType>(['transcript', 'note', 'email-sent', 'email-received', 'recommendation']);
+const CONVO_ICON: Partial<Record<ActivityType, typeof MessagesSquare>> = {
+  transcript: Phone, 'email-sent': Mail, 'email-received': Mail, note: StickyNote, recommendation: Sparkles,
+};
+const stringAngles = (meta: Record<string, unknown> | undefined): string[] | undefined =>
+  Array.isArray(meta?.angles) ? (meta!.angles as unknown[]).filter((x): x is string => typeof x === 'string') : undefined;
+
 const toRef = (n: NewsItem): NewsRef => ({ source: n.source, title: n.title, url: n.url });
 const docHasMarketData = (doc: ReportDoc): boolean =>
   (doc.content ?? []).some((n) => n.type === 'metricsTable' || n.type === 'priceChart');
@@ -63,6 +74,9 @@ export function ReportGenerator() {
   const [ctxSnapshot, setCtxSnapshot] = useState(true);
   const [ctxBrief, setCtxBrief] = useState(false);
   const [ctxNotes, setCtxNotes] = useState('');
+  // Past conversations from the linked client's timeline, ticked to ground the draft.
+  const [convos, setConvos] = useState<ClientActivity[]>([]);
+  const [selectedConvos, setSelectedConvos] = useState<Set<string>>(new Set());
 
   const [drafting, setDrafting] = useState(false);
   const [draftStage, setDraftStage] = useState<string | null>(null);
@@ -79,6 +93,8 @@ export function ReportGenerator() {
   const [picking, setPicking] = useState(false);
   const [pendingTemplate, setPendingTemplate] = useState<DocumentTemplate | null>(null);
   const [pickProfileId, setPickProfileId] = useState<string | undefined>(undefined);
+  // Talk-track angles handed off from the client hub to seed a follow-up draft.
+  const [seedAngles, setSeedAngles] = useState<string[] | null>(null);
   // CRM: the open client hub (overview → client hub → studio).
   const [activeClientId, setActiveClientId] = useState<string | null>(null);
   const [creatingClient, setCreatingClient] = useState(false);
@@ -119,17 +135,21 @@ export function ReportGenerator() {
     for (const n of news.filter((x) => selected.has(x.id))) {
       items.push({ id: `news-sel:${n.id}`, kind: 'news', label: n.title, news: [toRef(n)] });
     }
+    for (const c of convos.filter((x) => selectedConvos.has(x.id))) {
+      items.push({ id: `convo-sel:${c.id}`, kind: 'conversation', label: c.title });
+    }
     return items;
-  }, [ctxSnapshot, ctxBrief, ctxNotes, selected, news]);
+  }, [ctxSnapshot, ctxBrief, ctxNotes, selected, news, convos, selectedConvos]);
 
   // Empty/missing context = legacy project or untouched tray → sensible defaults.
   const restoreContext = (items: ContextItem[] | undefined) => {
     const ctx = items ?? [];
-    if (!ctx.length) { setCtxSnapshot(true); setCtxBrief(false); setCtxNotes(''); setSelected(new Set()); return; }
+    if (!ctx.length) { setCtxSnapshot(true); setCtxBrief(false); setCtxNotes(''); setSelected(new Set()); setSelectedConvos(new Set()); return; }
     setCtxSnapshot(ctx.some((c) => c.kind === 'marketSnapshot'));
     setCtxBrief(ctx.some((c) => c.kind === 'dailyBrief'));
     setCtxNotes(ctx.find((c) => c.kind === 'note' && c.id === 'extra-notes')?.note ?? '');
     setSelected(new Set(ctx.filter((c) => c.id.startsWith('news-sel:')).map((c) => c.id.slice('news-sel:'.length))));
+    setSelectedConvos(new Set(ctx.filter((c) => c.id.startsWith('convo-sel:')).map((c) => c.id.slice('convo-sel:'.length))));
   };
 
   // ── Debounced autosave (doc + inputs + context tray) ──
@@ -157,7 +177,16 @@ export function ReportGenerator() {
   const setField = (k: keyof ReportInputs, v: string) => { markDirty(); setInputs((s) => ({ ...s, [k]: v })); };
 
   // ── Project lifecycle ──
-  const resetTransient = () => { setSnapshot(null); setProvider(''); setShowVersions(false); setErr(null); setFiles([]); setRefQuery(''); };
+  const resetTransient = () => { setSnapshot(null); setProvider(''); setShowVersions(false); setErr(null); setFiles([]); setRefQuery(''); setConvos([]); };
+  // Load the linked client's conversational timeline entries so they can be ticked
+  // as context for the draft (selection itself is restored separately via the tray).
+  const loadConvos = (project: { inputs?: ReportInputs }) => {
+    const cid = (project.inputs as ReportInputs | undefined)?.clientProfileId;
+    if (!cid) { setConvos([]); return; }
+    api.profiles.get(cid)
+      .then((p) => setConvos(p.activities.filter((a) => CONVO_TYPES.has(a.type))))
+      .catch(() => setConvos([]));
+  };
   // Load the project's own files AND the linked client's media bank (deduped), so
   // a client's bills/LOAs/notes can be inserted into any report built for them.
   const loadFiles = (project: { id: string; inputs?: ReportInputs }) => {
@@ -174,7 +203,13 @@ export function ReportGenerator() {
   // Start the new-document flow (optionally pre-selecting a client).
   const startNew = (profileId?: string) => { setPickProfileId(profileId); setPendingTemplate(null); setPicking(true); };
   const onTemplatePicked = (t: DocumentTemplate) => { setPendingTemplate(t); setPicking(false); setCreating(true); };
-  const cancelCreate = () => { setCreating(false); setPendingTemplate(null); setPickProfileId(undefined); };
+  const cancelCreate = () => { setCreating(false); setPendingTemplate(null); setPickProfileId(undefined); setSeedAngles(null); };
+  // From the talk track: jump straight into a post-call follow-up email, seeding it
+  // with the client's gathered angles (folded into the new project's agent notes).
+  const draftFromAngles = async (client: { id: string }, angles: string[]) => {
+    setSeedAngles(angles);
+    await startDocumentForClient(client, 'builtin-post-call-followup');
+  };
   // From the client hub: create a document for this client, optionally jumping
   // straight to a recommended template (skipping the picker).
   const startDocumentForClient = async (client: { id: string }, templateId?: string) => {
@@ -188,16 +223,16 @@ export function ReportGenerator() {
 
   const onProfileDone = (p: ReportProject) => {
     dirty.current = false;
-    setCreating(false); setPendingTemplate(null); setPickProfileId(undefined);
+    setCreating(false); setPendingTemplate(null); setPickProfileId(undefined); setSeedAngles(null);
     setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
-    resetTransient(); restoreContext(p.context); loadFiles(p); refreshProjects();
+    resetTransient(); restoreContext(p.context); loadFiles(p); loadConvos(p); refreshProjects();
   };
   const openProject = async (id: string) => {
     try {
       const p = await api.projects.get(id);
       dirty.current = false;
       setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
-      resetTransient(); restoreContext(p.context); loadFiles(p);
+      resetTransient(); restoreContext(p.context); loadFiles(p); loadConvos(p);
     } catch (e) { setErr(String((e as Error).message)); }
   };
   // Back to the overview — flush any pending autosave first.
@@ -247,6 +282,10 @@ export function ReportGenerator() {
     setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   };
   const selectedNews = () => news.filter((n) => selected.has(n.id));
+  const toggleConvo = (id: string) => {
+    markDirty();
+    setSelectedConvos((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
 
   const addRefUrl = async () => {
     if (!refUrl.trim()) return;
@@ -329,6 +368,12 @@ export function ReportGenerator() {
         dailyBrief,
         extraNotes: [ctxNotes, fileNotes].filter(Boolean).join('\n\n'),
         templateId: inputs.documentTypeId,
+        linkedConversations: convos.filter((c) => selectedConvos.has(c.id)).map((c) => ({
+          when: c.at,
+          summary: c.title,
+          points: c.detail ? [c.detail.slice(0, 1500)] : undefined,
+          angles: stringAngles(c.meta),
+        })),
       });
       setSnapshot(res.snapshot); setProvider(res.provider);
       if (res.provider === 'error' && res.note) setErr(`Auto-drafting unavailable (${res.note.slice(0, 150)}). Built an editable skeleton you can fill in.`);
@@ -429,13 +474,14 @@ export function ReportGenerator() {
     return (
       <>
         {picking && <DocumentTypePicker onPick={onTemplatePicked} onCancel={() => setPicking(false)} />}
-        {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} onDone={onProfileDone} onCancel={cancelCreate} />}
+        {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} seedAngles={seedAngles ?? undefined} onDone={onProfileDone} onCancel={cancelCreate} />}
         {creatingClient && <ClientCreate onCreated={(c) => { setCreatingClient(false); refreshProjects(); setActiveClientId(c.id); }} onCancel={() => setCreatingClient(false)} />}
         {activeClientId ? (
           <ClientHub
             clientId={activeClientId}
             onBack={() => setActiveClientId(null)}
             onStartDocument={startDocumentForClient}
+            onDraftFromAngles={draftFromAngles}
             onOpenProject={openProject}
           />
         ) : (
@@ -462,7 +508,7 @@ export function ReportGenerator() {
   return (
     <>
       {picking && <DocumentTypePicker onPick={onTemplatePicked} onCancel={() => setPicking(false)} />}
-      {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} onDone={onProfileDone} onCancel={cancelCreate} />}
+      {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} seedAngles={seedAngles ?? undefined} onDone={onProfileDone} onCancel={cancelCreate} />}
 
       {/* Top bar */}
       <div className="card px-3 py-2 flex flex-wrap items-center gap-2 sticky top-[57px] z-20 mb-3">
@@ -631,6 +677,31 @@ export function ReportGenerator() {
               </div>
             </div>
           </CollapsibleSection>
+
+          {convos.length > 0 && (
+            <CollapsibleSection
+              title="Past conversations"
+              icon={MessagesSquare}
+              defaultOpen={false}
+              right={<span className="text-[11px] text-brand-muted font-normal">{selectedConvos.size}/{convos.length} linked</span>}
+            >
+              <p className="label mb-1.5">Tick a conversation to ground this draft in what was said.</p>
+              <div className="space-y-0.5 max-h-44 overflow-auto pr-1">
+                {convos.map((a) => {
+                  const Icon = CONVO_ICON[a.type] ?? MessagesSquare;
+                  return (
+                    <label key={a.id} className="flex items-start gap-1.5 text-xs py-0.5 cursor-pointer">
+                      <input type="checkbox" className="mt-0.5 accent-brand-green shrink-0" checked={selectedConvos.has(a.id)} onChange={() => toggleConvo(a.id)} />
+                      <Icon size={12} className="mt-0.5 text-brand-greenDark shrink-0" />
+                      <span className="flex-1 leading-snug">{a.title}</span>
+                      <span className="text-brand-muted shrink-0">{relativeTime(a.at)}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-brand-muted mt-1.5">Their summary, key points and talk-track angles are woven in as context — never restated as fact.</p>
+            </CollapsibleSection>
+          )}
 
           <CollapsibleSection title="Your input" icon={PenLine} defaultOpen>
             <div className="space-y-2.5">

@@ -194,7 +194,7 @@ export interface CustomChartData {
 }
 
 // ── AI context tray ──
-export type ContextKind = 'clientInfo' | 'marketSnapshot' | 'dailyBrief' | 'news' | 'customChart' | 'note';
+export type ContextKind = 'clientInfo' | 'marketSnapshot' | 'dailyBrief' | 'news' | 'customChart' | 'note' | 'conversation';
 export interface ContextItem {
   id: string;
   kind: ContextKind;
@@ -232,6 +232,7 @@ export interface AssembleContextPayload {
   extraNotes?: string;
   customCharts?: { id: string; title: string; points: CustomChartPoint[] }[];
   templateId?: string;
+  linkedConversations?: { when?: string; summary?: string; points?: string[]; angles?: string[] }[];
 }
 export interface AssembleResult { sections: SectionSpec[]; snapshot: MarketSnapshot; provider: string; note?: string; }
 

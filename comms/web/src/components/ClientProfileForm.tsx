@@ -14,11 +14,13 @@ const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string; wid
 
 // Step 1 of report creation: build (or pick) the client profile, optionally
 // pre-filled from a pasted call transcript, then create the project.
-export function ClientProfileForm({ onDone, onCancel, template, initialProfileId }: {
+export function ClientProfileForm({ onDone, onCancel, template, initialProfileId, seedAngles }: {
   onDone: (p: ReportProject) => void;
   onCancel: () => void;
   template?: DocumentTemplate | null;
   initialProfileId?: string;
+  /** Talk-track angles to fold into the draft's agent notes (from "Draft follow-up"). */
+  seedAngles?: string[];
 }) {
   const [profiles, setProfiles] = useState<ClientProfile[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -41,6 +43,12 @@ export function ClientProfileForm({ onDone, onCancel, template, initialProfileId
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Handed-off talk-track angles steer THIS draft only — folded into the project's
+  // notes at create time, never persisted onto the durable client profile.
+  const angleNote = seedAngles?.length
+    ? `Follow-up should build on these talk-track angles:\n${seedAngles.map((a) => `• ${a}`).join('\n')}`
+    : '';
 
   const set = (k: keyof ReportInputs, v: string) => setInputs((s) => ({ ...s, [k]: v }));
   const pickSaved = (id: string) => {
@@ -84,6 +92,7 @@ export function ClientProfileForm({ onDone, onCancel, template, initialProfileId
       else if (inputs.companyName?.trim()) { const created = await api.profiles.create({ inputs }).catch(() => null); if (created) clientId = created.id; }
       const docInputs: ReportInputs = {
         ...inputs,
+        ...(angleNote ? { agentNotes: [inputs.agentNotes, angleNote].filter(Boolean).join('\n\n') } : {}),
         ...(template ? { documentTypeId: template.id, documentChannel: template.channel, documentTypeName: template.name, documentSubtitle: template.subtitle, reportKind: template.reportKind } : {}),
         ...(clientId ? { clientProfileId: clientId } : {}),
       };
@@ -117,6 +126,19 @@ export function ClientProfileForm({ onDone, onCancel, template, initialProfileId
           )}
           Capture the client’s details — these become the document header and steer the draft.
         </p>
+
+        {seedAngles?.length ? (
+          <div className="mb-4 rounded-lg bg-brand-tint border border-brand-line px-3 py-2.5">
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-brand-greenDark mb-1.5">
+              <Sparkles size={12} /> Building on {seedAngles.length} talk-track angle{seedAngles.length > 1 ? 's' : ''}
+            </div>
+            <ul className="space-y-0.5">
+              {seedAngles.map((a) => (
+                <li key={a} className="text-[13px] text-brand-ink leading-snug flex gap-1.5"><span className="text-brand-green shrink-0">›</span>{a}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         {profiles.length > 0 && (
           <div className="mb-4">

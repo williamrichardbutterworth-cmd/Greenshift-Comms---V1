@@ -32,11 +32,12 @@ const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
 // an AI next-step, a client-specific "talk track", the dialogue timeline, intake
 // (paste/upload) and a media bank of their documents.
 export function ClientHub({
-  clientId, onBack, onStartDocument, onOpenProject,
+  clientId, onBack, onStartDocument, onDraftFromAngles, onOpenProject,
 }: {
   clientId: string;
   onBack: () => void;
   onStartDocument: (client: ClientProfile, templateId?: string) => void;
+  onDraftFromAngles: (client: ClientProfile, angles: string[]) => void;
   onOpenProject: (projectId: string) => void;
 }) {
   const [client, setClient] = useState<ClientProfile | null>(null);
@@ -288,7 +289,10 @@ export function ClientHub({
               <div className="flex items-center gap-2 mb-2.5">
                 <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/10 text-brand-greenDark"><Lightbulb size={13} /></span>
                 <h3 className="text-sm font-semibold">Talk track</h3>
-                <span className="text-[11px] text-brand-muted">— angles for this client, gathered from your conversations</span>
+                <span className="text-[11px] text-brand-muted hidden sm:inline">— angles for this client, gathered from your conversations</span>
+                <button className="btn-ghost !py-1 !px-2 text-xs ml-auto shrink-0" onClick={() => onDraftFromAngles(client, angles)} title="Draft a follow-up email built on these angles">
+                  <Sparkles size={13} /> Draft follow-up
+                </button>
               </div>
               <ul className="space-y-1.5">
                 {angles.map((ang) => (

@@ -107,6 +107,8 @@ Use only the figures and evidence provided. Keep it professional and client-read
 
 export interface AssembleNews { source: string; title: string; summary?: string }
 export interface AssembleCustomChart { id: string; title: string; points: { label: string; value: number }[] }
+/** A past conversation/summary the agent has chosen to ground this draft in. */
+export interface AssembleConversation { when?: string; summary?: string; points?: string[]; angles?: string[] }
 export interface AssembleContext {
   selectedNews?: AssembleNews[];
   includeSnapshot?: boolean;
@@ -115,6 +117,8 @@ export interface AssembleContext {
   customCharts?: AssembleCustomChart[];
   /** Which document template to build to (resolved server-side). */
   templateId?: string;
+  /** Prior conversations with this client, fed as context (text only — never figures to restate as fact). */
+  linkedConversations?: AssembleConversation[];
 }
 
 function assembleNewsForPrompt(news: AssembleNews[]): string {
@@ -143,6 +147,7 @@ ${ctx.dailyBrief ? `\nToday's market brief (context):\n${ctx.dailyBrief}` : ''}
 ${ctx.selectedNews?.length ? `\nAttached news headlines:\n${assembleNewsForPrompt(ctx.selectedNews)}` : ''}
 ${ctx.extraNotes ? `\nExtra context from the agent:\n${ctx.extraNotes}` : ''}
 ${inputs.agentNotes ? `\nAgent's own notes / projections:\n${inputs.agentNotes}` : ''}
+${(ctx.linkedConversations ?? []).length ? `\nLinked past conversations with this client (context — restate or build on these, do NOT invent beyond them):\n${ctx.linkedConversations!.map((c) => `- ${c.when ? `[${c.when.slice(0, 10)}] ` : ''}${c.summary ?? ''}${c.angles?.length ? ` | angles: ${c.angles.join('; ')}` : ''}${c.points?.length ? ` | facts: ${c.points.join('; ')}` : ''}`).join('\n')}` : ''}
 ${(ctx.customCharts ?? []).length ? `\nThe agent's charts you may embed:\n${ctx.customCharts!.map((c) => `- "${c.title}" (id ${c.id}): ${c.points.map((p) => `${p.label}=${p.value}`).join(', ')}`).join('\n')}` : ''}`;
 }
 
