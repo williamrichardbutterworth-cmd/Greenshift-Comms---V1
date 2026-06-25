@@ -272,7 +272,7 @@ export function CommsEditor({
   return (
     <div className="card overflow-hidden">
       {/* Formatting toolbar */}
-      <div ref={toolbarRef} className="flex flex-wrap items-center gap-1 p-2 border-b border-brand-line bg-brand-surface sticky top-[57px] z-[5]">
+      <div ref={toolbarRef} className="flex flex-wrap items-center gap-1 p-2 border-b border-brand-line bg-brand-surface sticky top-[calc(var(--topbar-h)+44px)] z-[5]">
         <ToolbarButton title="Bold" active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}><Bold size={15} /></ToolbarButton>
         <ToolbarButton title="Italic" active={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()}><Italic size={15} /></ToolbarButton>
         <span className="w-px h-5 bg-brand-line mx-0.5" />

@@ -511,7 +511,7 @@ export function ReportGenerator() {
       {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} seedAngles={seedAngles ?? undefined} onDone={onProfileDone} onCancel={cancelCreate} />}
 
       {/* Top bar */}
-      <div className="card px-3 py-2 flex flex-wrap items-center gap-2 sticky top-[57px] z-20 mb-3">
+      <div className="card px-3 py-2 flex flex-wrap items-center gap-2 sticky top-[var(--topbar-h)] z-20 mb-3">
         <button className="btn-ghost !py-1.5 !px-2" onClick={goHome} title="All reports & clients">
           <LayoutGrid size={15} />
         </button>
@@ -583,7 +583,7 @@ export function ReportGenerator() {
 
       {/* 3-zone layout: page thumbnails (documents only) · page · setup */}
       <div className={'grid grid-cols-1 gap-6 items-start ' + (isEmail ? 'xl:grid-cols-[minmax(0,1fr)_380px]' : 'xl:grid-cols-[170px_minmax(0,1fr)_380px]')}>
-        {!isEmail && <div className="hidden xl:block sticky top-[110px]"><PageOverview editor={editorInstance} /></div>}
+        {!isEmail && <div className="hidden xl:block sticky top-[calc(var(--topbar-h)+44px)]"><PageOverview editor={editorInstance} /></div>}
 
         <div className="min-w-0 relative">
           <CommsEditor surface={isEmail ? 'email' : 'a4'} docKey={docKey} initialDoc={doc} onChange={onDocChange} onReady={handleReady} onFiles={onUpload} onDropReference={onDropReference} />
@@ -602,7 +602,7 @@ export function ReportGenerator() {
         </div>
 
         <div className="space-y-3">
-          <CollapsibleSection title="Client profile" icon={Building2} defaultOpen={false}>
+          <CollapsibleSection title="Client profile" icon={Building2} defaultOpen={false} persistKey="tray-client">
             <div className="space-y-2.5">
               {FIELDS.map((f) => (
                 <div key={f.key}>
@@ -617,6 +617,7 @@ export function ReportGenerator() {
             title="References &amp; media"
             icon={Library}
             defaultOpen
+            persistKey="tray-references"
             right={<span className="text-[11px] text-brand-muted font-normal">{news.length} articles · {files.length} files</span>}
           >
             <div className="space-y-3">
@@ -683,6 +684,7 @@ export function ReportGenerator() {
               title="Past conversations"
               icon={MessagesSquare}
               defaultOpen={false}
+              persistKey="tray-conversations"
               right={<span className="text-[11px] text-brand-muted font-normal">{selectedConvos.size}/{convos.length} linked</span>}
             >
               <p className="label mb-1.5">Tick a conversation to ground this draft in what was said.</p>
@@ -703,7 +705,7 @@ export function ReportGenerator() {
             </CollapsibleSection>
           )}
 
-          <CollapsibleSection title="Your input" icon={PenLine} defaultOpen>
+          <CollapsibleSection title="Your input" icon={PenLine} defaultOpen persistKey="tray-input">
             <div className="space-y-2.5">
               <div>
                 <label className="label block mb-1">Notes &amp; projections</label>

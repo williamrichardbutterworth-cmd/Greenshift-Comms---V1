@@ -108,7 +108,7 @@ export function DailyReview() {
             </div>
 
             {/* Right: talking-points control panel */}
-            <section className="card p-4 lg:sticky lg:top-[76px]">
+            <section className="card p-4 lg:sticky lg:top-[calc(var(--topbar-h)+16px)]">
               <div className="label mb-2">Talking points</div>
               <div className="flex flex-wrap gap-1.5 mb-3">
                 {TP_TABS.map((t) => {

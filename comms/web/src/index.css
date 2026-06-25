@@ -3,6 +3,13 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* Shell metrics — referenced by sticky offsets so they all move together
+       if the chrome height changes (replaces magic 57/76/110px literals). */
+    --topbar-h: 52px;
+    --sidebar-w: 248px;
+    --sidebar-w-collapsed: 64px;
+  }
   html,
   body,
   #root {

@@ -3,6 +3,11 @@ export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
+      // Wide-desktop breakpoint — most layout caps at xl(1280) today and
+      // sprawls past it; 3xl lets the dashboard/studio use the extra width.
+      screens: { '3xl': '1792px' },
+      // One content-width system (replaces ad-hoc max-w-6xl / max-w-[1800px]).
+      maxWidth: { content: '1500px', wide: '1760px' },
       // Exact Green Shift brand values, sampled from the logo.
       colors: {
         brand: {

@@ -57,6 +57,9 @@ const WIDGETS: { id: string; title: string }[] = [
   { id: 'generation-mix', title: 'Generation mix' },
 ];
 const DEFAULT_ORDER = WIDGETS.map((w) => w.id);
+// Wide widgets (charts/maps) span the full grid; metric groups + the mix tile 2-up
+// on a wide desktop so the dashboard uses the horizontal space instead of one column.
+const FULL_WIDTH_WIDGETS = new Set(['forward-curve', 'price-history', 'generation-map']);
 
 interface Layout { order: string[]; hidden: string[]; }
 
@@ -252,11 +255,15 @@ export function Dashboard() {
         )}
       </section>
 
-      {/* Customizable widgets */}
-      {layout.order.filter((id) => !hidden.has(id)).map((id) => {
-        const node = renderWidget(id);
-        return node ? <div key={id}>{node}</div> : null;
-      })}
+      {/* Customizable widgets — tile into a responsive grid on wide desktops. */}
+      <div className="grid grid-cols-1 2xl:grid-cols-2 gap-6 items-start">
+        {layout.order.filter((id) => !hidden.has(id)).map((id) => {
+          const node = renderWidget(id);
+          return node ? (
+            <div key={id} className={'min-w-0 ' + (FULL_WIDTH_WIDGETS.has(id) ? '2xl:col-span-2' : '')}>{node}</div>
+          ) : null;
+        })}
+      </div>
 
       <footer className="text-xs text-brand-muted space-y-1">
         <div>Data as of {new Date(data.asOf).toLocaleString('en-GB')}.</div>
