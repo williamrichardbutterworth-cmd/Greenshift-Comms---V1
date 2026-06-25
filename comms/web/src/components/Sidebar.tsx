@@ -1,13 +1,14 @@
-import { LayoutDashboard, Newspaper, Users, Sparkles, Lightbulb, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, Newspaper, Users, Sparkles, Lightbulb, FileText, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 // Section ids are STABLE (referenced widely as `tab`); only labels/icons change.
-export type Tab = 'dashboard' | 'brief' | 'news' | 'report' | 'ideas';
+export type Tab = 'dashboard' | 'brief' | 'news' | 'report' | 'documents' | 'ideas';
 
 export const NAV: { id: Tab; label: string; icon: typeof LayoutDashboard; group?: 'intel' | 'work' }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'intel' },
   { id: 'brief', label: 'Daily Brief', icon: Sparkles, group: 'intel' },
   { id: 'news', label: 'News', icon: Newspaper, group: 'intel' },
   { id: 'report', label: 'Clients', icon: Users, group: 'work' },
+  { id: 'documents', label: 'Documents', icon: FileText, group: 'work' },
   { id: 'ideas', label: 'Admin Ideas', icon: Lightbulb, group: 'work' },
 ];
 
@@ -19,12 +20,13 @@ const GROUP_LABEL: Record<NonNullable<(typeof NAV)[number]['group']>, string> = 
 };
 
 export function Sidebar({
-  section, onChange, collapsed, onToggleCollapse,
+  section, onChange, collapsed, onToggleCollapse, docCount = 0,
 }: {
   section: Tab;
   onChange: (t: Tab) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  docCount?: number;
 }) {
   let lastGroup: string | undefined;
   return (
@@ -65,7 +67,7 @@ export function Sidebar({
                 title={collapsed ? item.label : undefined}
                 aria-current={active ? 'page' : undefined}
                 className={
-                  'w-full flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition ' +
+                  'relative w-full flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition ' +
                   (collapsed ? 'justify-center ' : '') +
                   (active
                     ? 'bg-brand-tint text-brand-greenDark'
@@ -73,7 +75,17 @@ export function Sidebar({
                 }
               >
                 <Icon size={18} className="shrink-0" />
-                {!collapsed && <span className="truncate">{item.label}</span>}
+                {!collapsed && <span className="flex-1 truncate text-left">{item.label}</span>}
+                {item.id === 'documents' && docCount > 0 && (
+                  <span
+                    className={
+                      'text-[10px] font-semibold rounded-full bg-brand-green/15 text-brand-greenDark min-w-[18px] text-center ' +
+                      (collapsed ? 'absolute top-1 right-1 px-1 leading-4' : 'px-1.5 py-0.5')
+                    }
+                  >
+                    {docCount}
+                  </span>
+                )}
               </button>
             </div>
           );

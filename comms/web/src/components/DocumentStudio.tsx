@@ -1,26 +1,20 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
 import type { Editor } from '@tiptap/react';
 import {
-  Sparkles, Download, FileText, Trash2, FilePlus2, History, Save, FolderOpen, Pencil, RotateCcw,
-  Paperclip, Loader2, ChevronDown, Building2, Library, PenLine, Link2, Plus, LayoutGrid, Search, Bookmark, Copy,
+  Sparkles, Download, FileText, Trash2, History, Save, Pencil, RotateCcw,
+  Paperclip, Loader2, ChevronDown, Building2, Library, PenLine, Link2, Plus, Search, Bookmark, Copy,
   MessagesSquare, Phone, Mail, StickyNote,
 } from 'lucide-react';
 import {
   api, EMPTY_DOC,
   type NewsItem, type ReportInputs, type MarketSnapshot, type ReportDoc, type ContextItem,
-  type ReportProject, type ReportProjectSummary, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle, type DocNode, type NewActivity,
+  type ReportProject, type ReportVersion, type NewsRef, type ClientFile, type SavedArticle, type DocNode, type NewActivity,
   type ClientActivity, type ActivityType,
 } from '../lib/api';
 import { relativeTime } from '../lib/crm';
 import { CommsEditor } from '../editor/CommsEditor';
 import { PageOverview } from '../editor/PageOverview';
-import { ClientProfileForm } from './ClientProfileForm';
-import { DocumentTypePicker } from './DocumentTypePicker';
-import type { DocumentTemplate } from '../lib/api';
 import { CollapsibleSection } from './CollapsibleSection';
-import { ReportHome } from './ReportHome';
-import { ClientHub } from './ClientHub';
-import { ClientCreate } from './ClientCreate';
 import { buildDocFromSections } from '../lib/buildDocFromSections';
 
 const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] = [
@@ -33,8 +27,6 @@ const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] 
   { key: 'consumption', label: 'Annual consumption', placeholder: '450,000 kWh' },
 ];
 
-// Staged status shown while the draft is assembled (the API call is one shot;
-// these keep the wait legible).
 const DRAFT_STAGES = [
   'Gathering live market data…',
   'Weighing the client profile and your references…',
@@ -42,7 +34,6 @@ const DRAFT_STAGES = [
   'Building your document…',
 ];
 
-// Timeline entries that read as "conversations" — the ones worth grounding a draft in.
 const CONVO_TYPES = new Set<ActivityType>(['transcript', 'note', 'email-sent', 'email-received', 'recommendation']);
 const CONVO_ICON: Partial<Record<ActivityType, typeof MessagesSquare>> = {
   transcript: Phone, 'email-sent': Mail, 'email-received': Mail, note: StickyNote, recommendation: Sparkles,
@@ -56,58 +47,64 @@ const docHasMarketData = (doc: ReportDoc): boolean =>
 const docHasContent = (doc: ReportDoc): boolean =>
   (doc.content ?? []).some((n) => n.type !== 'paragraph' || (n.content?.length ?? 0) > 0);
 
-export function ReportGenerator() {
-  const [projects, setProjects] = useState<ReportProjectSummary[]>([]);
-  const [current, setCurrent] = useState<ReportProject | null>(null);
-  const [inputs, setInputs] = useState<ReportInputs>({});
-  const [doc, setDoc] = useState<ReportDoc>(EMPTY_DOC);
-  const [docKey, setDocKey] = useState('none');
+// Tray state ⇄ report_projects.context (kept stable so saved trays don't reset).
+interface TrayInit { ctxSnapshot: boolean; ctxBrief: boolean; ctxNotes: string; selected: Set<string>; selectedConvos: Set<string> }
+function parseContext(items?: ContextItem[]): TrayInit {
+  const ctx = items ?? [];
+  if (!ctx.length) return { ctxSnapshot: true, ctxBrief: false, ctxNotes: '', selected: new Set(), selectedConvos: new Set() };
+  return {
+    ctxSnapshot: ctx.some((c) => c.kind === 'marketSnapshot'),
+    ctxBrief: ctx.some((c) => c.kind === 'dailyBrief'),
+    ctxNotes: ctx.find((c) => c.kind === 'note' && c.id === 'extra-notes')?.note ?? '',
+    selected: new Set(ctx.filter((c) => c.id.startsWith('news-sel:')).map((c) => c.id.slice('news-sel:'.length))),
+    selectedConvos: new Set(ctx.filter((c) => c.id.startsWith('convo-sel:')).map((c) => c.id.slice('convo-sel:'.length))),
+  };
+}
+
+// One open document's editor + setup tray. Mounted per active tab (keyed by project
+// id), so all state is seeded from `project` at mount; edits autosave and flush into
+// the workspace session on unmount so background tabs keep their changes.
+export function DocumentStudio({ project, onProjectSaved }: {
+  project: ReportProject;
+  onProjectSaved: (p: ReportProject) => void;
+}) {
+  const init = useRef(parseContext(project.context)).current;
+
+  const [proj, setProj] = useState<ReportProject>(project);
+  const [inputs, setInputs] = useState<ReportInputs>(project.inputs ?? {});
+  const [doc, setDoc] = useState<ReportDoc>(project.doc ?? EMPTY_DOC);
   const editorRef = useRef<Editor | null>(null);
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
   const dirty = useRef(false);
 
   const [news, setNews] = useState<NewsItem[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(init.selected);
   const [snapshot, setSnapshot] = useState<MarketSnapshot | null>(null);
   const [provider, setProvider] = useState('');
 
-  const [ctxSnapshot, setCtxSnapshot] = useState(true);
-  const [ctxBrief, setCtxBrief] = useState(false);
-  const [ctxNotes, setCtxNotes] = useState('');
-  // Past conversations from the linked client's timeline, ticked to ground the draft.
+  const [ctxSnapshot, setCtxSnapshot] = useState(init.ctxSnapshot);
+  const [ctxBrief, setCtxBrief] = useState(init.ctxBrief);
+  const [ctxNotes, setCtxNotes] = useState(init.ctxNotes);
   const [convos, setConvos] = useState<ClientActivity[]>([]);
-  const [selectedConvos, setSelectedConvos] = useState<Set<string>>(new Set());
+  const [selectedConvos, setSelectedConvos] = useState<Set<string>>(init.selectedConvos);
 
   const [drafting, setDrafting] = useState(false);
   const [draftStage, setDraftStage] = useState<string | null>(null);
   const [exporting, setExporting] = useState<'pdf' | 'docx' | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [showVersions, setShowVersions] = useState(false);
-  const [showOpen, setShowOpen] = useState(false);
   const [showExport, setShowExport] = useState(false);
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const [creating, setCreating] = useState(false);
-  // New-document flow: pick a template, then capture the client profile.
-  const [picking, setPicking] = useState(false);
-  const [pendingTemplate, setPendingTemplate] = useState<DocumentTemplate | null>(null);
-  const [pickProfileId, setPickProfileId] = useState<string | undefined>(undefined);
-  // Talk-track angles handed off from the client hub to seed a follow-up draft.
-  const [seedAngles, setSeedAngles] = useState<string[] | null>(null);
-  // CRM: the open client hub (overview → client hub → studio).
-  const [activeClientId, setActiveClientId] = useState<string | null>(null);
-  const [creatingClient, setCreatingClient] = useState(false);
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [refUrl, setRefUrl] = useState('');
   const [refQuery, setRefQuery] = useState('');
   const [addingUrl, setAddingUrl] = useState(false);
 
-  const refreshProjects = useCallback(() => api.projects.list().then(setProjects).catch(() => {}), []);
-
   // References = saved-article library + the live feed (deduped by title).
-  const reloadEvidence = () => Promise.all([
+  const reloadEvidence = useCallback(() => Promise.all([
     api.news(10).catch(() => [] as NewsItem[]),
     api.savedArticles.list().catch(() => [] as SavedArticle[]),
   ]).then(([liveItems, saved]) => {
@@ -122,74 +119,11 @@ export function ReportGenerator() {
       seen.add(k);
       return true;
     }));
-  });
+  }), []);
 
-  useEffect(() => { refreshProjects(); reloadEvidence(); }, [refreshProjects]);
-
-  // ── Context tray ⇄ report_projects.context ──
-  const buildContext = useCallback((): ContextItem[] => {
-    const items: ContextItem[] = [];
-    if (ctxSnapshot) items.push({ id: 'market-snapshot', kind: 'marketSnapshot', label: 'Live market snapshot' });
-    if (ctxBrief) items.push({ id: 'daily-brief', kind: 'dailyBrief', label: 'Today’s market brief' });
-    if (ctxNotes.trim()) items.push({ id: 'extra-notes', kind: 'note', label: 'Extra context', note: ctxNotes });
-    for (const n of news.filter((x) => selected.has(x.id))) {
-      items.push({ id: `news-sel:${n.id}`, kind: 'news', label: n.title, news: [toRef(n)] });
-    }
-    for (const c of convos.filter((x) => selectedConvos.has(x.id))) {
-      items.push({ id: `convo-sel:${c.id}`, kind: 'conversation', label: c.title });
-    }
-    return items;
-  }, [ctxSnapshot, ctxBrief, ctxNotes, selected, news, convos, selectedConvos]);
-
-  // Empty/missing context = legacy project or untouched tray → sensible defaults.
-  const restoreContext = (items: ContextItem[] | undefined) => {
-    const ctx = items ?? [];
-    if (!ctx.length) { setCtxSnapshot(true); setCtxBrief(false); setCtxNotes(''); setSelected(new Set()); setSelectedConvos(new Set()); return; }
-    setCtxSnapshot(ctx.some((c) => c.kind === 'marketSnapshot'));
-    setCtxBrief(ctx.some((c) => c.kind === 'dailyBrief'));
-    setCtxNotes(ctx.find((c) => c.kind === 'note' && c.id === 'extra-notes')?.note ?? '');
-    setSelected(new Set(ctx.filter((c) => c.id.startsWith('news-sel:')).map((c) => c.id.slice('news-sel:'.length))));
-    setSelectedConvos(new Set(ctx.filter((c) => c.id.startsWith('convo-sel:')).map((c) => c.id.slice('convo-sel:'.length))));
-  };
-
-  // ── Debounced autosave (doc + inputs + context tray) ──
+  // Load the linked client's conversational timeline + this project's + client's files.
   useEffect(() => {
-    if (!current || !dirty.current) return;
-    const t = setTimeout(async () => {
-      setSaveState('saving');
-      try {
-        const saved = await api.projects.update(current.id, { doc, inputs, context: buildContext() });
-        dirty.current = false;
-        setSaveState('saved');
-        setCurrent((c) => (c && c.id === saved.id ? saved : c));
-        refreshProjects();
-      } catch (e) {
-        setErr(String((e as Error).message));
-        setSaveState('idle');
-      }
-    }, 1200);
-    return () => clearTimeout(t);
-  }, [doc, inputs, current, buildContext, refreshProjects]);
-
-  const markDirty = () => { dirty.current = true; };
-  const handleReady = useCallback((e: Editor) => { editorRef.current = e; setEditorInstance(e); }, []);
-  const onDocChange = (d: ReportDoc) => { markDirty(); setDoc(d); };
-  const setField = (k: keyof ReportInputs, v: string) => { markDirty(); setInputs((s) => ({ ...s, [k]: v })); };
-
-  // ── Project lifecycle ──
-  const resetTransient = () => { setSnapshot(null); setProvider(''); setShowVersions(false); setErr(null); setFiles([]); setRefQuery(''); setConvos([]); };
-  // Load the linked client's conversational timeline entries so they can be ticked
-  // as context for the draft (selection itself is restored separately via the tray).
-  const loadConvos = (project: { inputs?: ReportInputs }) => {
-    const cid = (project.inputs as ReportInputs | undefined)?.clientProfileId;
-    if (!cid) { setConvos([]); return; }
-    api.profiles.get(cid)
-      .then((p) => setConvos(p.activities.filter((a) => CONVO_TYPES.has(a.type))))
-      .catch(() => setConvos([]));
-  };
-  // Load the project's own files AND the linked client's media bank (deduped), so
-  // a client's bills/LOAs/notes can be inserted into any report built for them.
-  const loadFiles = (project: { id: string; inputs?: ReportInputs }) => {
+    reloadEvidence();
     const cid = (project.inputs as ReportInputs | undefined)?.clientProfileId;
     Promise.all([
       api.files.list({ projectId: project.id }).catch(() => [] as ClientFile[]),
@@ -198,94 +132,64 @@ export function ReportGenerator() {
       const seen = new Set<string>();
       setFiles([...pf, ...cf].filter((f) => (seen.has(f.id) ? false : (seen.add(f.id), true))));
     }).catch(() => setFiles([]));
-  };
+    if (cid) api.profiles.get(cid).then((p) => setConvos(p.activities.filter((a) => CONVO_TYPES.has(a.type)))).catch(() => setConvos([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
 
-  // Start the new-document flow (optionally pre-selecting a client).
-  const startNew = (profileId?: string) => { setPickProfileId(profileId); setPendingTemplate(null); setPicking(true); };
-  const onTemplatePicked = (t: DocumentTemplate) => { setPendingTemplate(t); setPicking(false); setCreating(true); };
-  const cancelCreate = () => { setCreating(false); setPendingTemplate(null); setPickProfileId(undefined); setSeedAngles(null); };
-  // From the talk track: jump straight into a post-call follow-up email, seeding it
-  // with the client's gathered angles (folded into the new project's agent notes).
-  const draftFromAngles = async (client: { id: string }, angles: string[]) => {
-    setSeedAngles(angles);
-    await startDocumentForClient(client, 'builtin-post-call-followup');
-  };
-  // From the client hub: create a document for this client, optionally jumping
-  // straight to a recommended template (skipping the picker).
-  const startDocumentForClient = async (client: { id: string }, templateId?: string) => {
-    setPickProfileId(client.id);
-    if (templateId) {
-      try { const t = await api.templates.get(templateId); setPendingTemplate(t); setPicking(false); setCreating(true); return; }
-      catch { /* fall back to the picker */ }
-    }
-    setPendingTemplate(null); setPicking(true);
-  };
+  // ── Context tray ⇄ report_projects.context ──
+  const buildContext = useCallback((): ContextItem[] => {
+    const items: ContextItem[] = [];
+    if (ctxSnapshot) items.push({ id: 'market-snapshot', kind: 'marketSnapshot', label: 'Live market snapshot' });
+    if (ctxBrief) items.push({ id: 'daily-brief', kind: 'dailyBrief', label: 'Today’s market brief' });
+    if (ctxNotes.trim()) items.push({ id: 'extra-notes', kind: 'note', label: 'Extra context', note: ctxNotes });
+    for (const n of news.filter((x) => selected.has(x.id))) items.push({ id: `news-sel:${n.id}`, kind: 'news', label: n.title, news: [toRef(n)] });
+    for (const c of convos.filter((x) => selectedConvos.has(x.id))) items.push({ id: `convo-sel:${c.id}`, kind: 'conversation', label: c.title });
+    return items;
+  }, [ctxSnapshot, ctxBrief, ctxNotes, selected, news, convos, selectedConvos]);
 
-  const onProfileDone = (p: ReportProject) => {
-    dirty.current = false;
-    setCreating(false); setPendingTemplate(null); setPickProfileId(undefined); setSeedAngles(null);
-    setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
-    resetTransient(); restoreContext(p.context); loadFiles(p); loadConvos(p); refreshProjects();
-  };
-  const openProject = async (id: string) => {
-    try {
-      const p = await api.projects.get(id);
-      dirty.current = false;
-      setCurrent(p); setInputs(p.inputs ?? {}); setDoc(p.doc ?? EMPTY_DOC); setDocKey(p.id);
-      resetTransient(); restoreContext(p.context); loadFiles(p); loadConvos(p);
-    } catch (e) { setErr(String((e as Error).message)); }
-  };
-  // Back to the overview — flush any pending autosave first.
-  const goHome = async () => {
-    if (current && dirty.current) {
-      try { await api.projects.update(current.id, { doc, inputs, context: buildContext() }); dirty.current = false; }
-      catch { /* the overview still opens; the project keeps its last good save */ }
-    }
-    setCurrent(null); setDoc(EMPTY_DOC); setInputs({}); setDocKey('none');
-    setSaveState('idle');
-    refreshProjects();
-  };
-  const renameProject = async () => {
-    if (!current) return;
-    const name = window.prompt('Report name', current.name);
-    if (!name) return;
-    try { const saved = await api.projects.update(current.id, { name }); setCurrent(saved); refreshProjects(); }
-    catch (e) { setErr(String((e as Error).message)); }
-  };
-  const deleteProject = async (id: string) => {
-    if (!window.confirm('Delete this report? This cannot be undone.')) return;
-    try {
-      await api.projects.remove(id);
-      if (current?.id === id) { setCurrent(null); setDoc(EMPTY_DOC); setInputs({}); setDocKey('none'); }
-      refreshProjects();
-    } catch (e) { setErr(String((e as Error).message)); }
-  };
-  const saveVersion = async () => {
-    if (!current) return;
-    const label = window.prompt('Name this version (optional)', '') ?? '';
-    try {
-      const saved = await api.projects.update(current.id, { doc, inputs, context: buildContext(), saveVersion: true, versionLabel: label });
-      dirty.current = false; setCurrent(saved); setSaveState('saved'); refreshProjects();
-    } catch (e) { setErr(String((e as Error).message)); }
-  };
-  const restoreVersion = (v: ReportVersion) => {
-    markDirty();
-    setInputs(v.inputs ?? {});
-    if (editorRef.current) editorRef.current.commands.setContent(v.doc, true);
-    else setDoc(v.doc);
-    setShowVersions(false);
-  };
+  const markDirty = () => { dirty.current = true; };
+  const handleReady = useCallback((e: Editor) => { editorRef.current = e; setEditorInstance(e); }, []);
+  const onDocChange = (d: ReportDoc) => { markDirty(); setDoc(d); };
+  const setField = (k: keyof ReportInputs, v: string) => { markDirty(); setInputs((s) => ({ ...s, [k]: v })); };
+
+  // ── Debounced autosave (doc + inputs + context tray) → session + list ──
+  useEffect(() => {
+    if (!dirty.current) return;
+    const t = setTimeout(async () => {
+      setSaveState('saving');
+      try {
+        const saved = await api.projects.update(proj.id, { doc, inputs, context: buildContext() });
+        dirty.current = false;
+        setSaveState('saved');
+        setProj(saved);
+        onProjectSaved(saved);
+      } catch (e) {
+        setErr(String((e as Error).message));
+        setSaveState('idle');
+      }
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [doc, inputs, proj.id, buildContext, onProjectSaved]);
+
+  // ── Flush unsaved edits when this tab unmounts (switch away / close) ──
+  // Refs hold the freshest values for the mount-only cleanup.
+  const flushRef = useRef<{ inputs: ReportInputs; buildContext: () => ContextItem[]; proj: ReportProject; onSaved: typeof onProjectSaved }>(
+    { inputs, buildContext, proj, onSaved: onProjectSaved },
+  );
+  flushRef.current = { inputs, buildContext, proj, onSaved: onProjectSaved };
+  useEffect(() => () => {
+    if (!dirty.current) return;
+    const { inputs: i, buildContext: bc, proj: p, onSaved } = flushRef.current;
+    const liveDoc = (editorRef.current?.getJSON() as ReportDoc | undefined) ?? p.doc ?? EMPTY_DOC;
+    const context = bc();
+    onSaved({ ...p, doc: liveDoc, inputs: i, context }); // optimistic session update so re-open keeps edits
+    api.projects.update(p.id, { doc: liveDoc, inputs: i, context }).catch(() => { /* best-effort */ });
+  }, []);
 
   // ── References ──
-  const toggle = (id: string) => {
-    markDirty();
-    setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  };
+  const toggle = (id: string) => { markDirty(); setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
   const selectedNews = () => news.filter((n) => selected.has(n.id));
-  const toggleConvo = (id: string) => {
-    markDirty();
-    setSelectedConvos((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  };
+  const toggleConvo = (id: string) => { markDirty(); setSelectedConvos((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
 
   const addRefUrl = async () => {
     if (!refUrl.trim()) return;
@@ -316,7 +220,6 @@ export function ReportGenerator() {
     e.dataTransfer.setData('application/x-comms-ref', JSON.stringify({ kind, id }));
     e.dataTransfer.effectAllowed = 'copy';
   };
-  // pos comes from the editor's drop handler (posAtCoords) → insert at the cursor.
   const onDropReference = (payload: string, pos?: number) => {
     try {
       const { kind, id } = JSON.parse(payload) as { kind: string; id: string };
@@ -327,7 +230,7 @@ export function ReportGenerator() {
 
   // ── Files & media ──
   const onUpload = async (fileList: FileList | null) => {
-    if (!fileList || !current) return;
+    if (!fileList) return;
     setUploading(true); setErr(null);
     try {
       for (const file of Array.from(fileList)) {
@@ -335,7 +238,7 @@ export function ReportGenerator() {
           const r = new FileReader(); r.onload = () => res(r.result as string); r.onerror = rej; r.readAsDataURL(file);
         });
         const base64 = dataUrl.split(',')[1] ?? '';
-        const saved = await api.files.upload({ name: file.name, mime: file.type, dataBase64: base64, projectId: current.id });
+        const saved = await api.files.upload({ name: file.name, mime: file.type, dataBase64: base64, projectId: proj.id });
         setFiles((f) => [saved, ...f]);
         if (file.type.startsWith('image/')) editorRef.current?.chain().focus().setImage({ src: dataUrl }).run();
       }
@@ -348,15 +251,11 @@ export function ReportGenerator() {
   };
 
   const assemble = async () => {
-    if (!current) return;
     if (docHasContent(doc) && !window.confirm('Assembling a draft will replace the current document. Continue?')) return;
     setDrafting(true); setErr(null);
     let stageIdx = 0;
     setDraftStage(DRAFT_STAGES[0]);
-    const stageTimer = setInterval(() => {
-      stageIdx = Math.min(stageIdx + 1, DRAFT_STAGES.length - 1);
-      setDraftStage(DRAFT_STAGES[stageIdx]);
-    }, 4500);
+    const stageTimer = setInterval(() => { stageIdx = Math.min(stageIdx + 1, DRAFT_STAGES.length - 1); setDraftStage(DRAFT_STAGES[stageIdx]); }, 4500);
     try {
       let dailyBrief: string | null = null;
       if (ctxBrief) { try { dailyBrief = (await api.dailyReview()).review ?? null; } catch { /* ignore */ } }
@@ -369,8 +268,7 @@ export function ReportGenerator() {
         extraNotes: [ctxNotes, fileNotes].filter(Boolean).join('\n\n'),
         templateId: inputs.documentTypeId,
         linkedConversations: convos.filter((c) => selectedConvos.has(c.id)).map((c) => ({
-          when: c.at,
-          summary: c.title,
+          when: c.at, summary: c.title,
           points: c.detail ? [c.detail.slice(0, 1500)] : undefined,
           angles: stringAngles(c.meta),
         })),
@@ -385,6 +283,27 @@ export function ReportGenerator() {
     finally { clearInterval(stageTimer); setDraftStage(null); setDrafting(false); }
   };
 
+  const renameProject = async () => {
+    const name = window.prompt('Report name', proj.name);
+    if (!name) return;
+    try { const saved = await api.projects.update(proj.id, { name }); setProj(saved); onProjectSaved(saved); }
+    catch (e) { setErr(String((e as Error).message)); }
+  };
+  const saveVersion = async () => {
+    const label = window.prompt('Name this version (optional)', '') ?? '';
+    try {
+      const saved = await api.projects.update(proj.id, { doc, inputs, context: buildContext(), saveVersion: true, versionLabel: label });
+      dirty.current = false; setProj(saved); setSaveState('saved'); onProjectSaved(saved);
+    } catch (e) { setErr(String((e as Error).message)); }
+  };
+  const restoreVersion = (v: ReportVersion) => {
+    markDirty();
+    setInputs(v.inputs ?? {});
+    if (editorRef.current) editorRef.current.commands.setContent(v.doc, true);
+    else setDoc(v.doc);
+    setShowVersions(false);
+  };
+
   const download = async (fmt: 'pdf' | 'docx') => {
     const liveDoc = (editorRef.current?.getJSON() as ReportDoc | undefined) ?? doc;
     if (!liveDoc.content?.length) return;
@@ -394,8 +313,6 @@ export function ReportGenerator() {
       if (!attributions.length && docHasMarketData(liveDoc)) {
         try { const m = await api.market(); attributions.push(...m.sources.filter((s) => s.attribution).map((s) => s.attribution!)); } catch { /* ignore */ }
       }
-      // Generation-map blocks carry their own NESO (CC BY 4.0) + Elexon attributions —
-      // these MUST appear in the export even when there's no metrics table or chart.
       for (const n of liveDoc.content ?? []) {
         if (n.type === 'gridMap') {
           const sources = (n.attrs as { snapshot?: { sources?: { attribution?: string }[] } } | undefined)?.snapshot?.sources ?? [];
@@ -408,20 +325,17 @@ export function ReportGenerator() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
       URL.revokeObjectURL(url);
-      logClientActivity({ type: 'document', title: `Exported ${fmt.toUpperCase()}${current ? `: ${current.name}` : ''}` });
+      logClientActivity({ type: 'document', title: `Exported ${fmt.toUpperCase()}: ${proj.name}` });
     } catch (e) { setErr(String((e as Error).message)); }
     finally { setExporting(null); }
   };
 
-  // Log an activity back to the client this document belongs to (no-op if none).
   const logClientActivity = (a: NewActivity) => {
     const cid = inputs.clientProfileId;
-    if (cid) api.profiles.addActivity(cid, a).catch(() => { /* timeline logging is best-effort */ });
+    if (cid) api.profiles.addActivity(cid, a).catch(() => { /* best-effort */ });
   };
 
   // ── Email channel: plain-text body from the live doc ──
-  // Preserve hard breaks (greetings/signatures), number ordered lists, and label
-  // any data block that was inserted so nothing silently vanishes from the email.
   const EMBED_LABEL: Record<string, string> = {
     metricsTable: '[Market data table]', priceChart: '[Price chart]', customChart: '[Chart]',
     gridMap: '[Generation map]', newsList: '[Supporting evidence]', kpiStrip: '[Headline figures]',
@@ -435,7 +349,6 @@ export function ReportGenerator() {
       .map((n) => {
         if (n.type === 'bulletList') return (n.content ?? []).map((li) => '- ' + nodeText(li).trim()).join('\n');
         if (n.type === 'orderedList') return (n.content ?? []).map((li, i) => `${i + 1}. ${nodeText(li).trim()}`).join('\n');
-        // The recommendation box carries real prose (the central message) — keep it.
         if (n.type === 'recommendationBox') {
           const d = n.attrs?.data as { text?: string; label?: string } | undefined;
           const t = (d?.text ?? '').trim();
@@ -444,14 +357,12 @@ export function ReportGenerator() {
         if (n.type in EMBED_LABEL) return EMBED_LABEL[n.type];
         return nodeText(n);
       })
-      .filter((s) => s.trim())
-      .join('\n\n')
-      .trim();
+      .filter((s) => s.trim()).join('\n\n').trim();
   };
   const copyEmail = async () => {
     const text = emailText();
-    const ok = () => { setCopied(true); setErr(null); setTimeout(() => setCopied(false), 1600); logClientActivity({ type: 'email-sent', title: `Email copied to send${current ? `: ${current.name}` : ''}` }); };
-    try { await navigator.clipboard.writeText(text); ok(); return; } catch { /* fall back to legacy copy below */ }
+    const ok = () => { setCopied(true); setErr(null); setTimeout(() => setCopied(false), 1600); logClientActivity({ type: 'email-sent', title: `Email copied to send: ${proj.name}` }); };
+    try { await navigator.clipboard.writeText(text); ok(); return; } catch { /* fall back below */ }
     try {
       const ta = document.createElement('textarea');
       ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
@@ -469,69 +380,16 @@ export function ReportGenerator() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Overview / client hub (no document open) ──
-  if (!current) {
-    return (
-      <>
-        {picking && <DocumentTypePicker onPick={onTemplatePicked} onCancel={() => setPicking(false)} />}
-        {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} seedAngles={seedAngles ?? undefined} onDone={onProfileDone} onCancel={cancelCreate} />}
-        {creatingClient && <ClientCreate onCreated={(c) => { setCreatingClient(false); refreshProjects(); setActiveClientId(c.id); }} onCancel={() => setCreatingClient(false)} />}
-        {activeClientId ? (
-          <ClientHub
-            clientId={activeClientId}
-            onBack={() => setActiveClientId(null)}
-            onStartDocument={startDocumentForClient}
-            onDraftFromAngles={draftFromAngles}
-            onOpenProject={openProject}
-          />
-        ) : (
-          <ReportHome
-            projects={projects}
-            onOpen={openProject}
-            onNew={() => startNew()}
-            onNewClient={() => setCreatingClient(true)}
-            onNewForClient={(profileId) => startNew(profileId)}
-            onOpenClient={(id) => setActiveClientId(id)}
-            onRefresh={refreshProjects}
-          />
-        )}
-        {err && <p className="text-sm text-up mt-3 text-center">{err}</p>}
-      </>
-    );
-  }
-
   const refQ = refQuery.trim().toLowerCase();
   const shownRefs = refQ ? news.filter((n) => n.title.toLowerCase().includes(refQ) || n.source.toLowerCase().includes(refQ)) : news;
-
   const isEmail = inputs.documentChannel === 'email';
 
   return (
     <>
-      {picking && <DocumentTypePicker onPick={onTemplatePicked} onCancel={() => setPicking(false)} />}
-      {creating && <ClientProfileForm template={pendingTemplate} initialProfileId={pickProfileId} seedAngles={seedAngles ?? undefined} onDone={onProfileDone} onCancel={cancelCreate} />}
-
-      {/* Top bar */}
+      {/* Doc action bar */}
       <div className="card px-3 py-2 flex flex-wrap items-center gap-2 sticky top-[var(--topbar-h)] z-20 mb-3">
-        <button className="btn-ghost !py-1.5 !px-2" onClick={goHome} title="All reports & clients">
-          <LayoutGrid size={15} />
-        </button>
-        <div className="relative">
-          <button className="btn-ghost !py-1.5" onClick={() => setShowOpen((v) => !v)}>
-            <FolderOpen size={15} /> <span className="max-w-[180px] truncate">{current.name}</span> <ChevronDown size={13} />
-          </button>
-          {showOpen && (
-            <div className="absolute left-0 mt-1 w-72 card p-1.5 z-30 max-h-80 overflow-auto" onMouseLeave={() => setShowOpen(false)}>
-              <button className="btn-primary w-full !py-1.5 mb-1" onClick={() => { setShowOpen(false); startNew(); }}><FilePlus2 size={14} /> New document</button>
-              {projects.map((p) => (
-                <div key={p.id} className={'group flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm cursor-pointer ' + (current.id === p.id ? 'bg-brand-tint' : 'hover:bg-brand-surface')} onClick={() => { setShowOpen(false); openProject(p.id); }}>
-                  <FolderOpen size={13} className="text-brand-muted shrink-0" />
-                  <span className="flex-1 truncate">{p.name}</span>
-                  <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up" onClick={(e) => { e.stopPropagation(); deleteProject(p.id); }} title="Delete"><Trash2 size={13} /></button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <FileText size={15} className="text-brand-greenDark shrink-0" />
+        <span className="font-medium text-sm max-w-[260px] truncate" title={proj.name}>{proj.name}</span>
         <button onClick={renameProject} title="Rename report" className="text-brand-muted hover:text-brand-ink"><Pencil size={13} /></button>
         <span className="text-xs text-brand-muted">{saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : ''}</span>
 
@@ -539,11 +397,11 @@ export function ReportGenerator() {
 
         <div className="relative">
           <button className="btn-ghost !py-1.5" onClick={() => setShowVersions((v) => !v)} title="Version history">
-            <History size={15} /> <span className="hidden sm:inline">Versions{current.versions.length ? ` (${current.versions.length})` : ''}</span>
+            <History size={15} /> <span className="hidden sm:inline">Versions{proj.versions.length ? ` (${proj.versions.length})` : ''}</span>
           </button>
           {showVersions && (
             <div className="absolute right-0 mt-1 w-64 card p-1.5 z-30 max-h-64 overflow-auto" onMouseLeave={() => setShowVersions(false)}>
-              {current.versions.length ? [...current.versions].reverse().map((v) => (
+              {proj.versions.length ? [...proj.versions].reverse().map((v) => (
                 <div key={v.at} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-brand-surface text-sm">
                   <div className="flex-1 min-w-0"><div className="truncate">{v.label}</div><div className="text-[11px] text-brand-muted">{new Date(v.at).toLocaleString('en-GB')}</div></div>
                   <button className="btn-ghost !px-1.5 !py-1" onClick={() => restoreVersion(v)} title="Restore"><RotateCcw size={13} /></button>
@@ -569,7 +427,6 @@ export function ReportGenerator() {
                 <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); copyEmail(); }}>Copy email text</button>
                 <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); downloadTxt(); }}>Download .txt</button>
               </>}
-              {/* A4 PDF/Word carry a market-report letterhead — only offer them for document-channel templates. */}
               {!isEmail && <>
                 <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); download('pdf'); }}>Download PDF</button>
                 <button className="block w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint" onClick={() => { setShowExport(false); download('docx'); }}>Download Word</button>
@@ -586,7 +443,7 @@ export function ReportGenerator() {
         {!isEmail && <div className="hidden xl:block sticky top-[calc(var(--topbar-h)+44px)]"><PageOverview editor={editorInstance} /></div>}
 
         <div className="min-w-0 relative">
-          <CommsEditor surface={isEmail ? 'email' : 'a4'} docKey={docKey} initialDoc={doc} onChange={onDocChange} onReady={handleReady} onFiles={onUpload} onDropReference={onDropReference} />
+          <CommsEditor surface={isEmail ? 'email' : 'a4'} docKey={proj.id} initialDoc={doc} onChange={onDocChange} onReady={handleReady} onFiles={onUpload} onDropReference={onDropReference} />
           {drafting && (
             <div className="absolute inset-0 z-10 grid place-items-center bg-white/70 backdrop-blur-[1.5px] rounded-xl">
               <div className="card px-7 py-5 text-center shadow-md max-w-xs">
@@ -654,9 +511,7 @@ export function ReportGenerator() {
                 {files.length > 0 && (
                   <div className="space-y-0.5 max-h-36 overflow-auto pr-1 mb-2">
                     {files.map((f) => {
-                      // A file from the client's media bank (not this report) must not be
-                      // hard-deleted here — that would destroy the client's source document.
-                      const clientFile = f.projectId !== current.id;
+                      const clientFile = f.projectId !== proj.id;
                       return (
                         <div key={f.id} draggable onDragStart={dragRef('file', f.id)} className="group flex items-center gap-1.5 text-xs py-0.5 cursor-grab">
                           <FileText size={12} className="text-brand-muted shrink-0" />
