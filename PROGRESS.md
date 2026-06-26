@@ -38,6 +38,7 @@
 | `6ed5c94` | **LOA ② flagship** — new **Letters of Authority** sidebar section, per-client. Stores the ACTUAL template (`web/public/loa-template.pdf`) + fills it via **pdf-lib overlay** at measured coords (page-1 fields + page-2 signature block). `lib/loa.ts` (13-field model, per-field provenance, `deriveLoaFromClient`, completeness, `fillLoaPdf`), `LoaSection.tsx` (builder: source badges, known/missing, manual edit, Read-from-conversations, Companies-House verify, fuel/services, Generate→download). |
 | `f150196` | **LOA ③ website scrape** — ClientCreate "Company website" → Fetch scrapes → company summary + harvested LOA fields/fuel/services ride onto the client (`inputs.loa/website/companySummary/customerVariables`). |
 | `8e63082` | **LOA ④ client-hub** — LOA completeness + customer-variables panel in the expanded client view. |
+| `843a413` | **Client journey flow map** — depth-styled (no WebGL) **Overview ⇄ Journey** view in the client hub: stage flowchart (current elevated, future receding), **captured ideas** (call angles), a flowing step-spine from the timeline, and a glowing **next-step** frontier (Generate-this-step / Add-the-next-step). `components/ClientJourney.tsx`. |
 
 ---
 
@@ -49,8 +50,7 @@
 
 ## Next up ⬜ (user-chosen, in order)
 
-> **Deferred from the "full pipeline system" brief (2026-06-26)** — the LOA automation (the flagship of that brief) is shipped (`890d97d`→`8e63082`); these larger/vaguer parts were explicitly deferred to focused passes:
-> - **3D flow map / journey timeline** per client — capture every proposed detail/idea from a call as a clean step; prospect overview with clear path recommendations + a one-click "add+generate the next step". (Needs a design decision on what "3D" means concretely — literal 3D vs rich flowchart/timeline.)
+> **"Full pipeline system" brief (2026-06-26)** — LOA automation shipped (`890d97d`→`8e63082`); **3D flow map shipped** (`843a413`, built as a depth-styled flow map per the user's choice — not literal WebGL). Still deferred:
 > - **Email dialogue management** — full email conversation history per client + AI recommended next emails/responses. (Builds on the existing email-channel + angles/conversation plumbing.)
 > - **LOA follow-ups** — let the user upload/replace the LOA template in-app (coords are currently hardcoded to the supplied Green Shift template); store generated LOAs via `fileStore` (clientProfileId) not just download; vision-extract LOA fields from an uploaded scan (reuse `extractForwardCurve` images path); auto-search Companies House on customerName.
 
