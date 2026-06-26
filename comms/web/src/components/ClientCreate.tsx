@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { X, Building2, Sparkles, Loader2, Paperclip, CheckCircle2, FilePlus2 } from 'lucide-react';
+import { X, Building2, Sparkles, Loader2, Paperclip, CheckCircle2, FilePlus2, Globe } from 'lucide-react';
 import {
   api, type ReportInputs, type ClientProfile, type SourceKind, type SourceAnalysis, type ActivityType,
 } from '../lib/api';
 import { milestoneLabel } from '../lib/crm';
+import { LOA_FIELDS, type LoaData, type CustomerVariables, type Fuel } from '../lib/loa';
 
 const FIELD_DEFS: Record<string, { label: string; placeholder: string }> = {
   companyName: { label: 'Company', placeholder: 'Acme Manufacturing Ltd' },
@@ -35,6 +36,10 @@ export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientPro
   const [text, setText] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<SourceAnalysis | null>(null);
+  const [website, setWebsite] = useState('');
+  const [scraping, setScraping] = useState(false);
+  // LOA fields + variables + summary harvested from the website (carried onto the client).
+  const [scraped, setScraped] = useState<{ summary: string; loa: LoaData; fuel: Fuel; services: string[] } | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState<string | null>(null);
@@ -44,7 +49,7 @@ export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientPro
 
   // Unsaved work guard — a stray backdrop click / Esc shouldn't bin a pasted
   // transcript, an analysis result or typed-in details without warning.
-  const isDirty = () => !!(text.trim() || analysis || file || Object.values(inputs).some((v) => (v ?? '').trim()));
+  const isDirty = () => !!(text.trim() || analysis || file || website.trim() || scraped || Object.values(inputs).some((v) => (v ?? '').trim()));
   const requestClose = () => { if (busy) return; if (!isDirty() || window.confirm('Discard this client? Your entered details will be lost.')) onCancel(); };
 
   // Esc closes (guarded), matching the other modals in the app.
@@ -54,6 +59,30 @@ export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientPro
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, analysis, file, inputs, busy]);
+
+  // Scrape the company website → company summary + harvest LOA details, then
+  // prefill the visible fields. The full LOA fields/variables ride onto the client.
+  const FIELD_TO_INPUT: Record<string, keyof ReportInputs> = { customerName: 'companyName', authorisedRep: 'clientName' };
+  const scrapeWebsite = async () => {
+    if (!website.trim()) return;
+    setScraping(true); setErr(null);
+    try {
+      const res = await api.loa.scrape(website.trim(), undefined);
+      if (res.error && res.provider !== 'claude' && res.provider !== 'openai') { setErr(res.error); return; }
+      // Prefill the visible client fields.
+      setInputs((s) => {
+        const next = { ...s } as Record<string, string>;
+        for (const [fk, ik] of Object.entries(FIELD_TO_INPUT)) { const v = res.fields[fk]; if (v && !(next[ik] ?? '').trim()) next[ik] = v; }
+        const contact = res.fields.email || res.fields.telephone;
+        if (contact && !(next.contact ?? '').trim()) next.contact = contact;
+        return next as ReportInputs;
+      });
+      const loa: LoaData = {};
+      for (const f of LOA_FIELDS) { const v = res.fields[f.key]; if (v && v.trim()) loa[f.key] = { value: v.trim(), source: 'website' }; }
+      setScraped({ summary: res.companySummary, loa, fuel: res.fuel, services: res.services });
+    } catch (e) { setErr(String((e as Error).message)); }
+    finally { setScraping(false); }
+  };
 
   // Analyse pasted text → prefill the editable fields + show what was found.
   const analysePasted = async () => {
@@ -88,7 +117,13 @@ export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientPro
     setBusy(true); setErr(null);
     try {
       setStage('Creating client…');
-      let client = await api.profiles.create({ name: companyName, inputs: { ...inputs, companyName } });
+      // Carry the website summary + harvested LOA fields + fuel/services onto the client.
+      const extra: Record<string, unknown> = {};
+      if (website.trim()) extra.website = website.trim();
+      if (scraped?.summary) extra.companySummary = scraped.summary;
+      if (scraped && Object.keys(scraped.loa).length) extra.loa = scraped.loa;
+      if (scraped && (scraped.fuel || scraped.services.length)) extra.customerVariables = { fuel: scraped.fuel, services: scraped.services } as CustomerVariables;
+      let client = await api.profiles.create({ name: companyName, inputs: { ...inputs, companyName, ...extra } as ReportInputs });
       // Past this point the client EXISTS on the server. Every enrichment step is
       // best-effort — a failure here must never strand the new client or send the
       // user back to a form that would create a duplicate on retry.
@@ -127,6 +162,27 @@ export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientPro
           <button className="btn-ghost !px-1.5 !py-1" onClick={onCancel} title="Close"><X size={16} /></button>
         </div>
         <p className="text-sm text-brand-muted mb-4">Draft a client from a bill, call transcript or email — we’ll read it and fill in the details. You can edit anything before saving.</p>
+
+        {/* Company website → scrape */}
+        <div className="card p-3 mb-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Globe size={15} className="text-brand-greenDark" />
+            <span className="text-sm font-medium">Company website</span>
+            <span className="text-[11px] text-brand-muted hidden sm:inline">— we’ll summarise it and harvest LOA details</span>
+          </div>
+          <div className="flex gap-1.5">
+            <input className="input !py-1.5 text-sm flex-1" placeholder="acme-manufacturing.co.uk" value={website} onChange={(e) => setWebsite(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') scrapeWebsite(); }} />
+            <button className="btn-ghost !py-1.5 text-sm" onClick={scrapeWebsite} disabled={scraping || !website.trim()}>
+              {scraping ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} {scraping ? 'Reading…' : 'Fetch'}
+            </button>
+          </div>
+          {scraped && (scraped.summary || Object.keys(scraped.loa).length > 0) && (
+            <div className="mt-2 text-xs">
+              {scraped.summary && <p className="text-brand-ink leading-snug">{scraped.summary}</p>}
+              {Object.keys(scraped.loa).length > 0 && <p className="text-brand-greenDark mt-1 inline-flex items-center gap-1"><CheckCircle2 size={12} /> Harvested {Object.keys(scraped.loa).length} LOA detail(s) — fill the rest in the Letters of Authority section.</p>}
+            </div>
+          )}
+        </div>
 
         {/* Draft from a document */}
         <div className="card p-3 bg-gradient-to-br from-brand-tint to-white mb-4">
