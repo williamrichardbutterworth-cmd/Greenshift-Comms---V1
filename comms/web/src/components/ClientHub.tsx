@@ -10,6 +10,7 @@ import {
 } from '../lib/api';
 import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, relativeTime, stageIndex } from '../lib/crm';
 import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '../lib/loa';
+import { ClientJourney } from './ClientJourney';
 
 const FIELDS: { key: keyof ReportInputs; label: string }[] = [
   { key: 'companyName', label: 'Company' },
@@ -47,6 +48,7 @@ export function ClientHub({
 
   const [next, setNext] = useState<NextStep | null>(null);
   const [nextLoading, setNextLoading] = useState(false);
+  const [view, setView] = useState<'overview' | 'journey'>('overview');
 
   const [intakeText, setIntakeText] = useState('');
   const [intakeKind, setIntakeKind] = useState<SourceKind>('transcript');
@@ -179,7 +181,17 @@ export function ClientHub({
 
   return (
     <div className="max-w-6xl mx-auto space-y-4">
-      <button className="btn-ghost !py-1.5 !px-2" onClick={onBack}><ArrowLeft size={15} /> All clients</button>
+      <div className="flex items-center justify-between gap-3">
+        <button className="btn-ghost !py-1.5 !px-2" onClick={onBack}><ArrowLeft size={15} /> All clients</button>
+        <div className="inline-flex rounded-lg border border-brand-line bg-white p-0.5 text-sm">
+          {(['overview', 'journey'] as const).map((v) => (
+            <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
+              className={'px-3 py-1 rounded-md transition ' + (view === v ? 'bg-brand-tint text-brand-greenDark font-medium' : 'text-brand-muted hover:text-brand-ink')}>
+              {v === 'journey' ? 'Journey' : 'Overview'}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* ── Header ── */}
       <section className="card overflow-hidden">
@@ -250,6 +262,17 @@ export function ClientHub({
         </div>
       </section>
 
+      {view === 'journey' ? (
+        <ClientJourney
+          client={client}
+          next={next}
+          nextLoading={nextLoading}
+          angles={angles}
+          onStartDocument={onStartDocument}
+          onDraftFromAngles={onDraftFromAngles}
+          onOpenProject={onOpenProject}
+        />
+      ) : (
       <div className="grid lg:grid-cols-[1fr_320px] gap-4 items-start">
         {/* ── Main column ── */}
         <div className="space-y-4 min-w-0">
@@ -452,6 +475,7 @@ export function ClientHub({
           </section>
         </div>
       </div>
+      )}
 
       {err && <p className="text-sm text-up" role="alert">{err}</p>}
     </div>
