@@ -377,6 +377,11 @@ export interface ChCompanyProfile extends ChCompanySummary { registeredAddress: 
 export interface ChSearchResult { items: ChCompanySummary[]; provider: string; error?: string; }
 export interface ChCompanyResult { company: ChCompanyProfile | null; provider: string; error?: string; }
 
+// ── Email dialogue ──
+export interface EmailMsg { direction: 'in' | 'out'; subject?: string; body: string; at?: string; }
+export interface EmailDraft { subject: string; body: string; provider: string; error?: string; }
+export interface EmailDraftPayload { inputs: ReportInputs; history: EmailMsg[]; mode: 'reply' | 'follow-up'; instruction?: string; angles?: string[]; }
+
 export const api = {
   market: () => j<MarketSnapshot>('/api/market'),
   grid: () => j<GridSnapshot>('/api/grid'),
@@ -480,6 +485,11 @@ export const api = {
     chCompany: (number: string) => j<ChCompanyResult>(`/api/companies-house/company/${encodeURIComponent(number)}`),
     scrape: (url: string, current?: Record<string, string>) => j<LoaExtractResult>('/api/loa/scrape', postJson({ url, current })),
     extract: (text: string, current?: Record<string, string>) => j<LoaExtractResult>('/api/loa/extract', postJson({ text, current })),
+  },
+
+  // Email dialogue — draft the next email/response in a client thread.
+  email: {
+    draft: (payload: EmailDraftPayload) => j<EmailDraft>('/api/email/draft', postJson(payload)),
   },
 
   // Mine a pasted call transcript for client details.

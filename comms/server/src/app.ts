@@ -12,6 +12,7 @@ import { fileRoutes } from './routes/files';
 import { ideasRoutes } from './routes/ideas';
 import { forwardCurveRoutes } from './routes/forwardCurve';
 import { loaRoutes } from './routes/loa';
+import { emailRoutes } from './routes/email';
 
 // Builds the Fastify app WITHOUT listening or starting the scheduler, so the
 // exact same app can run as a long-lived local server (index.ts) or be wrapped
@@ -49,6 +50,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(ideasRoutes);
   await app.register(forwardCurveRoutes);
   await app.register(loaRoutes);
+  await app.register(emailRoutes);
 
   return app;
 }

@@ -11,6 +11,7 @@ import {
 import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, relativeTime, stageIndex } from '../lib/crm';
 import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '../lib/loa';
 import { ClientJourney } from './ClientJourney';
+import { EmailThread } from './EmailThread';
 
 const FIELDS: { key: keyof ReportInputs; label: string }[] = [
   { key: 'companyName', label: 'Company' },
@@ -48,7 +49,7 @@ export function ClientHub({
 
   const [next, setNext] = useState<NextStep | null>(null);
   const [nextLoading, setNextLoading] = useState(false);
-  const [view, setView] = useState<'overview' | 'journey'>('overview');
+  const [view, setView] = useState<'overview' | 'journey' | 'emails'>('overview');
 
   const [intakeText, setIntakeText] = useState('');
   const [intakeKind, setIntakeKind] = useState<SourceKind>('transcript');
@@ -184,10 +185,10 @@ export function ClientHub({
       <div className="flex items-center justify-between gap-3">
         <button className="btn-ghost !py-1.5 !px-2" onClick={onBack}><ArrowLeft size={15} /> All clients</button>
         <div className="inline-flex rounded-lg border border-brand-line bg-white p-0.5 text-sm">
-          {(['overview', 'journey'] as const).map((v) => (
+          {(['overview', 'journey', 'emails'] as const).map((v) => (
             <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
               className={'px-3 py-1 rounded-md transition ' + (view === v ? 'bg-brand-tint text-brand-greenDark font-medium' : 'text-brand-muted hover:text-brand-ink')}>
-              {v === 'journey' ? 'Journey' : 'Overview'}
+              {v === 'journey' ? 'Journey' : v === 'emails' ? 'Emails' : 'Overview'}
             </button>
           ))}
         </div>
@@ -272,6 +273,8 @@ export function ClientHub({
           onDraftFromAngles={onDraftFromAngles}
           onOpenProject={onOpenProject}
         />
+      ) : view === 'emails' ? (
+        <EmailThread client={client} inputs={inputs} angles={angles} logActivity={logActivity} />
       ) : (
       <div className="grid lg:grid-cols-[1fr_320px] gap-4 items-start">
         {/* ── Main column ── */}

@@ -476,3 +476,37 @@ ${LOA_FIELD_GUIDE}
 Rules: Use ONLY facts present in the text — never invent a company number, MPAN, address or postcode. Leave any field you can't ground as "". Do not guess the postcode from the town. Plain UK English.`,
   };
 }
+
+// ── Email dialogue: draft the next email in an ongoing client conversation ──
+export interface EmailMsg { direction: 'in' | 'out'; subject?: string; body: string; at?: string }
+
+export function emailDraftPrompt(
+  inputs: ReportInputs,
+  history: EmailMsg[],
+  opts: { mode: 'reply' | 'follow-up'; instruction?: string; angles?: string[] },
+) {
+  const thread = history
+    .map((m) => `${m.direction === 'in' ? 'CLIENT' : 'US (Green Shift agent)'}${m.subject ? ` — subject "${m.subject}"` : ''}:\n${m.body}`)
+    .join('\n\n---\n\n');
+  return {
+    system: HOUSE_RULES,
+    prompt: `Draft the NEXT email in an ongoing conversation between a Green Shift Energy agent and a UK business energy customer.
+
+Client details:
+${JSON.stringify(inputs, null, 2)}
+${opts.angles?.length ? `\nTalk-track angles for this client (use where natural):\n${opts.angles.map((a) => `- ${a}`).join('\n')}` : ''}
+
+Conversation so far (oldest first; "US" = the agent, "CLIENT" = the customer):
+${thread || '(no prior emails — this is the opening email)'}
+
+Task: Write ${opts.mode === 'reply' ? "a reply to the client's most recent message" : 'a proactive follow-up email that moves the relationship forward'}.${opts.instruction ? `\nSpecific instruction from the agent: ${opts.instruction}` : ''}
+
+Return ONLY JSON in exactly this shape:
+{
+  "subject": "concise relevant subject line (reuse the thread subject with 'Re:' when replying)",
+  "body": "the full email body — greet the contact by first name, a warm and professional message that responds to / builds on the conversation, a clear next step, then a sign-off from the Green Shift Energy agent. Plain text, no markdown, no placeholders like [name]."
+}
+
+Rules: Use ONLY the details and conversation provided — never invent prices, figures, dates or commitments. Hedged, professional UK English; this is general commentary, not a quotation or advice. Keep it concise and human. The agent will review and edit before sending.`,
+  };
+}
