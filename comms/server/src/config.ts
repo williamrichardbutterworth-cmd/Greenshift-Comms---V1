@@ -26,10 +26,20 @@ export const config = {
   useLiveNews: bool(process.env.USE_LIVE_NEWS, true),
   marketauxApiKey: process.env.MARKETAUX_API_KEY ?? '',
   newsdataApiKey: process.env.NEWSDATA_API_KEY ?? '',
+
+  // Companies House (UK company registry) — free API key from
+  // developer.company-information.service.gov.uk. Optional: LOA lookup degrades
+  // to manual entry when unset.
+  companiesHouseApiKey: process.env.COMPANIES_HOUSE_API_KEY ?? '',
+  companiesHouseBaseUrl: process.env.COMPANIES_HOUSE_BASE_URL ?? 'https://api.company-information.service.gov.uk',
 } as const;
 
 export function aiConfigured(): boolean {
   return config.aiProvider === 'openai'
     ? Boolean(config.openaiApiKey)
     : Boolean(config.anthropicApiKey);
+}
+
+export function companiesHouseConfigured(): boolean {
+  return Boolean(config.companiesHouseApiKey);
 }

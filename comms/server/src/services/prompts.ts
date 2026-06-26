@@ -423,3 +423,56 @@ Produce a short, skimmable product digest for the admin:
 Keep it under ~250 words. Use plain text only — UPPERCASE section headings and simple dashes for lists. Do NOT use any markdown symbols (#, *, _ or backticks).`,
   };
 }
+
+// ── Letter of Authority (LOA) extraction + company-website summary ──
+// The fixed set of LOA variables we try to harvest from any source (call
+// transcript, the company website, uploaded docs). Empty string === unknown.
+export const LOA_FIELD_KEYS = [
+  'customerName', 'registeredNo', 'businessAddress', 'postcode', 'telephone',
+  'authorisedRep', 'email', 'mpan', 'mpr', 'siteAddresses', 'signatoryName', 'position', 'signatoryEmail',
+] as const;
+
+const LOA_FIELD_GUIDE = `- customerName: the customer's full legal/trading name (the entity signing the LOA)
+- registeredNo: UK company registration number (8 digits) if a limited company; else ''
+- businessAddress: registered/main business address (street, town) — exclude the postcode
+- postcode: the business postcode on its own
+- telephone: a business phone number
+- authorisedRep: the contact/decision-maker we deal with
+- email: the customer's email address
+- mpan: electricity meter point (MPAN, the long S-number / 13-digit "bottom line") if stated
+- mpr: gas meter point reference (MPR/MPRN) if stated
+- siteAddresses: address(es) of the supplied site(s); separate multiple with "; "
+- signatoryName: the person who will sign (PRINT NAME) — often the authorised rep
+- position: the signatory's job title / position
+- signatoryEmail: the signatory's email if different from email; else ''`;
+
+export function loaExtractPrompt(text: string, current?: Record<string, string>, fromWebsite = false) {
+  const known = current && Object.entries(current).filter(([, v]) => (v ?? '').trim()).length
+    ? `\nWhat we already know (do NOT overwrite these unless the source is clearly more accurate; only fill the BLANKS):\n${JSON.stringify(current, null, 2)}`
+    : '';
+  return {
+    system: HOUSE_RULES,
+    prompt: `Extract the details needed to complete a UK energy Letter of Authority for a business customer, from the ${fromWebsite ? 'company website text' : 'source text'} below.
+${known}
+
+${fromWebsite ? 'Company website text' : 'Source'}:
+"""
+${text.slice(0, 14000)}
+"""
+
+Return ONLY JSON in exactly this shape:
+{
+  "fields": {
+${LOA_FIELD_KEYS.map((k) => `    "${k}": ""`).join(',\n')}
+  },
+  "fuel": "",            // one of "gas" | "electric" | "both" | "" — which energy they buy, if discernible
+  "services": [],        // short list of relevant services/needs mentioned (e.g. "contract renewal", "bill validation")
+  "companySummary": ""   // ${fromWebsite ? '2-3 sentence plain-English overview of what the company does (only from the text)' : 'leave empty unless the source describes the business'}
+}
+
+Field guidance:
+${LOA_FIELD_GUIDE}
+
+Rules: Use ONLY facts present in the text — never invent a company number, MPAN, address or postcode. Leave any field you can't ground as "". Do not guess the postcode from the town. Plain UK English.`,
+  };
+}
