@@ -5,14 +5,20 @@ import {
 } from '../lib/api';
 import { milestoneLabel } from '../lib/crm';
 
-const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string; wide?: boolean; required?: boolean }[] = [
-  { key: 'companyName', label: 'Company', placeholder: 'Acme Manufacturing Ltd', wide: true, required: true },
-  { key: 'clientName', label: 'Contact name', placeholder: 'Jane Smith' },
-  { key: 'contact', label: 'Contact detail', placeholder: 'jane@acme.co.uk' },
-  { key: 'currentSupplier', label: 'Current supplier', placeholder: 'British Gas' },
-  { key: 'contractEnd', label: 'Contract end', placeholder: 'Sep 2026' },
-  { key: 'consumption', label: 'Annual consumption', placeholder: '450,000 kWh' },
-  { key: 'sites', label: 'Sites / meters', placeholder: '3 sites · 4 MPANs' },
+const FIELD_DEFS: Record<string, { label: string; placeholder: string }> = {
+  companyName: { label: 'Company', placeholder: 'Acme Manufacturing Ltd' },
+  clientName: { label: 'Contact name', placeholder: 'Jane Smith' },
+  contact: { label: 'Contact detail', placeholder: 'jane@acme.co.uk' },
+  currentSupplier: { label: 'Current supplier', placeholder: 'British Gas' },
+  contractEnd: { label: 'Contract end', placeholder: 'Sep 2026' },
+  consumption: { label: 'Annual consumption', placeholder: '450,000 kWh' },
+  sites: { label: 'Sites / meters', placeholder: '3 sites · 4 MPANs' },
+};
+// Grouped so the form reads as a structured record (matches the studio tray).
+const FIELD_GROUPS: { label: string; keys: (keyof ReportInputs)[] }[] = [
+  { label: 'Identity', keys: ['companyName', 'clientName', 'contact'] },
+  { label: 'Contract', keys: ['currentSupplier', 'contractEnd', 'sites'] },
+  { label: 'Consumption', keys: ['consumption'] },
 ];
 
 const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
@@ -149,16 +155,23 @@ export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientPro
           </div>
         </div>
 
-        {/* Editable details */}
-        <div className="grid sm:grid-cols-2 gap-3">
-          {FIELDS.map((f) => (
-            <div key={f.key} className={f.wide ? 'sm:col-span-2' : ''}>
-              <label className="label block mb-1">{f.label}{f.required && <span className="text-up" aria-hidden="true"> *</span>}</label>
-              <input className="input" placeholder={f.placeholder} value={inputs[f.key] ?? ''} onChange={(e) => set(f.key, e.target.value)} />
+        {/* Editable details — grouped */}
+        <div className="space-y-3">
+          {FIELD_GROUPS.map((g) => (
+            <div key={g.label}>
+              <div className="label mb-1.5">{g.label}</div>
+              <div className="grid sm:grid-cols-2 gap-3">
+                {g.keys.map((key) => (
+                  <div key={key} className={key === 'companyName' ? 'sm:col-span-2' : ''}>
+                    <label className="text-[11px] text-brand-muted block mb-0.5">{FIELD_DEFS[key].label}{key === 'companyName' && <span className="text-up" aria-hidden="true"> *</span>}</label>
+                    <input className="input" placeholder={FIELD_DEFS[key].placeholder} value={inputs[key] ?? ''} onChange={(e) => set(key, e.target.value)} />
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
-          <div className="sm:col-span-2">
-            <label className="label block mb-1">Notes</label>
+          <div>
+            <div className="label mb-1.5">Notes</div>
             <textarea className="input min-h-[56px]" placeholder="Budget, risk appetite, renewal goals…" value={inputs.agentNotes ?? ''} onChange={(e) => set('agentNotes', e.target.value)} />
           </div>
         </div>

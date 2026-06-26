@@ -320,7 +320,7 @@ export function ClientHub({
               ))}
             </div>
             <textarea className="input min-h-[84px] text-sm" placeholder="Paste the transcript / email / bill text here…" value={intakeText} onChange={(e) => setIntakeText(e.target.value)} />
-            <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <div className="flex items-center gap-2 mt-2">
               <button className="btn-primary !py-1.5 text-sm" onClick={analyzePasted} disabled={analyzing || !intakeText.trim()}>
                 {analyzing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} {analyzing ? 'Reading…' : 'Read & log'}
               </button>
@@ -328,9 +328,13 @@ export function ClientHub({
                 {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />} Upload document
                 <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAndAnalyze(f); e.target.value = ''; }} />
               </label>
-              <span className="flex-1" />
+            </div>
+
+            {/* Manual quick-log — separated from the AI composer for a cleaner panel */}
+            <div className="mt-3 pt-3 border-t border-brand-line flex items-center gap-1.5 flex-wrap">
+              <span className="label mr-0.5">Quick log</span>
               {QUICK_LOG.map((q) => (
-                <button key={q.label} onClick={() => quickLog(q)} className="text-[11px] px-2 py-1 rounded-md border border-brand-line text-brand-muted hover:text-brand-ink hover:bg-brand-tint">{q.label}</button>
+                <button key={q.label} onClick={() => quickLog(q)} className="text-[11px] px-2 py-1 rounded-md border border-brand-line text-brand-muted hover:text-brand-ink hover:bg-brand-tint transition">{q.label}</button>
               ))}
             </div>
           </section>

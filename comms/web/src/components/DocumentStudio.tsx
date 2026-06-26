@@ -17,14 +17,20 @@ import { PageOverview } from '../editor/PageOverview';
 import { CollapsibleSection } from './CollapsibleSection';
 import { buildDocFromSections } from '../lib/buildDocFromSections';
 
-const FIELDS: { key: keyof ReportInputs; label: string; placeholder: string }[] = [
-  { key: 'companyName', label: 'Company', placeholder: 'Acme Manufacturing Ltd' },
-  { key: 'clientName', label: 'Contact name', placeholder: 'Jane Smith' },
-  { key: 'contact', label: 'Contact detail', placeholder: 'jane@acme.co.uk' },
-  { key: 'sites', label: 'Sites / meters', placeholder: '3 sites · 4 MPANs' },
-  { key: 'currentSupplier', label: 'Current supplier', placeholder: 'British Gas' },
-  { key: 'contractEnd', label: 'Contract end', placeholder: 'Sep 2026' },
-  { key: 'consumption', label: 'Annual consumption', placeholder: '450,000 kWh' },
+const FIELDS: Record<string, { label: string; placeholder: string }> = {
+  companyName: { label: 'Company', placeholder: 'Acme Manufacturing Ltd' },
+  clientName: { label: 'Contact name', placeholder: 'Jane Smith' },
+  contact: { label: 'Contact detail', placeholder: 'jane@acme.co.uk' },
+  sites: { label: 'Sites / meters', placeholder: '3 sites · 4 MPANs' },
+  currentSupplier: { label: 'Current supplier', placeholder: 'British Gas' },
+  contractEnd: { label: 'Contract end', placeholder: 'Sep 2026' },
+  consumption: { label: 'Annual consumption', placeholder: '450,000 kWh' },
+};
+// Grouped so the client panel reads as a structured record, not a flat field stack.
+const FIELD_GROUPS: { label: string; keys: (keyof ReportInputs)[] }[] = [
+  { label: 'Identity', keys: ['companyName', 'clientName', 'contact'] },
+  { label: 'Contract', keys: ['currentSupplier', 'contractEnd', 'sites'] },
+  { label: 'Consumption', keys: ['consumption'] },
 ];
 
 const DRAFT_STAGES = [
@@ -102,6 +108,7 @@ export function DocumentStudio({ project, onProjectSaved }: {
   const [refUrl, setRefUrl] = useState('');
   const [refQuery, setRefQuery] = useState('');
   const [addingUrl, setAddingUrl] = useState(false);
+  const [refTab, setRefTab] = useState<'articles' | 'files'>('articles');
 
   // References = saved-article library + the live feed (deduped by title).
   const reloadEvidence = useCallback(() => Promise.all([
@@ -460,11 +467,18 @@ export function DocumentStudio({ project, onProjectSaved }: {
 
         <div className="space-y-3">
           <CollapsibleSection title="Client profile" icon={Building2} defaultOpen={false} persistKey="tray-client">
-            <div className="space-y-2.5">
-              {FIELDS.map((f) => (
-                <div key={f.key}>
-                  <label className="label block mb-1">{f.label}</label>
-                  <input className="input !py-1.5 text-sm" placeholder={f.placeholder} value={inputs[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} />
+            <div className="space-y-3">
+              {FIELD_GROUPS.map((g) => (
+                <div key={g.label}>
+                  <div className="label mb-1.5">{g.label}</div>
+                  <div className="space-y-2">
+                    {g.keys.map((key) => (
+                      <div key={key}>
+                        <label className="text-[11px] text-brand-muted block mb-0.5">{FIELDS[key].label}</label>
+                        <input className="input !py-1.5 text-sm" placeholder={FIELDS[key].placeholder} value={inputs[key] ?? ''} onChange={(e) => setField(key, e.target.value)} />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -478,59 +492,81 @@ export function DocumentStudio({ project, onProjectSaved }: {
             right={<span className="text-[11px] text-brand-muted font-normal">{news.length} articles · {files.length} files</span>}
           >
             <div className="space-y-3">
-              <div className="flex gap-1.5">
-                <input className="input !py-1.5 text-sm flex-1" placeholder="Paste an article URL…" value={refUrl} onChange={(e) => setRefUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addRefUrl(); }} />
-                <button className="btn-ghost !py-1.5 !px-2" onClick={addRefUrl} disabled={addingUrl || !refUrl.trim()} title="Fetch & add to library">{addingUrl ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}</button>
+              {/* Articles | Files segmented tabs */}
+              <div className="flex gap-1 p-0.5 bg-brand-surface rounded-lg">
+                {(['articles', 'files'] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setRefTab(t)}
+                    className={'flex-1 text-xs py-1 rounded-md transition ' + (refTab === t ? 'bg-white shadow-soft text-brand-ink font-medium' : 'text-brand-muted hover:text-brand-ink')}
+                  >
+                    {t === 'articles' ? `Articles · ${news.length}` : `Files · ${files.length}`}
+                  </button>
+                ))}
               </div>
 
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <div className="label flex-1">Articles — tick to use as context, ＋ to insert</div>
-                </div>
-                {news.length > 6 && (
-                  <div className="relative mb-1.5">
-                    <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
-                    <input className="input !py-1 !pl-7 text-xs" placeholder="Filter articles…" value={refQuery} onChange={(e) => setRefQuery(e.target.value)} />
+              {refTab === 'articles' ? (
+                <>
+                  <div className="flex gap-1.5">
+                    <input className="input !py-1.5 text-sm flex-1" placeholder="Paste an article URL…" value={refUrl} onChange={(e) => setRefUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addRefUrl(); }} />
+                    <button className="btn-ghost !py-1.5 !px-2" onClick={addRefUrl} disabled={addingUrl || !refUrl.trim()} title="Fetch & add to library">{addingUrl ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}</button>
                   </div>
-                )}
-                <div className="space-y-0.5 max-h-40 overflow-auto pr-1">
-                  {shownRefs.map((n) => (
-                    <div key={n.id} draggable onDragStart={dragRef('article', n.id)} className="group flex items-start gap-1.5 text-xs py-0.5 cursor-grab">
-                      <input type="checkbox" className="mt-0.5 accent-brand-green shrink-0" checked={selected.has(n.id)} onChange={() => toggle(n.id)} title="Use as context" />
-                      {n.id.startsWith('lib-') && <Bookmark size={11} className="mt-0.5 text-brand-greenDark shrink-0" />}
-                      <span className="flex-1 leading-snug"><span className="text-brand-greenDark">{n.source}:</span> {n.title}</span>
-                      <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-green shrink-0" onClick={() => insertArticle(n)} title="Insert into report"><Plus size={13} /></button>
+                  <div className="label">Tick to use as context, ＋ to insert</div>
+                  {news.length > 6 && (
+                    <div className="relative">
+                      <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-brand-muted pointer-events-none" />
+                      <input className="input !py-1 !pl-7 text-xs" placeholder="Filter articles…" value={refQuery} onChange={(e) => setRefQuery(e.target.value)} />
                     </div>
-                  ))}
-                  {!shownRefs.length && <p className="text-xs text-brand-muted">{refQ ? 'No articles match.' : 'No articles yet — paste a URL or save from the News tab.'}</p>}
-                </div>
-              </div>
-
-              <div>
-                <div className="label mb-1">Files &amp; media</div>
-                {files.length > 0 && (
-                  <div className="space-y-0.5 max-h-36 overflow-auto pr-1 mb-2">
-                    {files.map((f) => {
-                      const clientFile = f.projectId !== proj.id;
-                      return (
-                        <div key={f.id} draggable onDragStart={dragRef('file', f.id)} className="group flex items-center gap-1.5 text-xs py-0.5 cursor-grab">
-                          <FileText size={12} className="text-brand-muted shrink-0" />
-                          <span className="flex-1 truncate" title={f.name}>{f.name}</span>
-                          {clientFile && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0" title="From this client’s media bank">client</span>}
-                          {f.extractedText && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0">ctx</span>}
-                          <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-green shrink-0" onClick={() => insertFile(f)} title="Insert into report"><Plus size={13} /></button>
-                          {!clientFile && <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0" onClick={() => removeUpload(f.id)} title="Remove"><Trash2 size={12} /></button>}
-                        </div>
-                      );
-                    })}
+                  )}
+                  <div className="space-y-0.5 max-h-56 overflow-auto pr-1">
+                    {shownRefs.map((n) => (
+                      <div key={n.id} draggable onDragStart={dragRef('article', n.id)} className="group flex items-start gap-1.5 text-xs py-0.5 cursor-grab">
+                        <input type="checkbox" className="mt-0.5 accent-brand-green shrink-0" checked={selected.has(n.id)} onChange={() => toggle(n.id)} title="Use as context" />
+                        {n.id.startsWith('lib-') && <Bookmark size={11} className="mt-0.5 text-brand-greenDark shrink-0" />}
+                        <span className="flex-1 leading-snug"><span className="text-brand-greenDark">{n.source}:</span> {n.title}</span>
+                        <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-green shrink-0" onClick={() => insertArticle(n)} title="Insert into report"><Plus size={13} /></button>
+                      </div>
+                    ))}
+                    {!shownRefs.length && <p className="text-xs text-brand-muted">{refQ ? 'No articles match.' : 'No articles yet — paste a URL or save from the News tab.'}</p>}
                   </div>
-                )}
-                <label className="btn-ghost w-full cursor-pointer justify-center !py-1.5 text-sm">
-                  {uploading ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />} Upload file or image
-                  <input type="file" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ''; }} />
-                </label>
-                <p className="text-[11px] text-brand-muted mt-1.5">PDFs/Word are mined for context; drag any item onto the page to insert it at the drop point, or drop files straight in.</p>
-              </div>
+                </>
+              ) : (
+                <>
+                  {files.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2 max-h-72 overflow-auto pr-1">
+                      {files.map((f) => {
+                        const clientFile = f.projectId !== proj.id;
+                        const isImage = f.mime.startsWith('image/');
+                        return (
+                          <div key={f.id} draggable onDragStart={dragRef('file', f.id)} className="group relative border border-brand-line rounded-lg overflow-hidden cursor-grab bg-white" title={`${f.name} — drag onto the page to insert`}>
+                            <div className="aspect-[4/3] bg-brand-surface grid place-items-center overflow-hidden">
+                              {isImage
+                                ? <img src={api.files.downloadUrl(f.id)} alt={f.name} className="w-full h-full object-cover" loading="lazy" />
+                                : <FileText size={26} className="text-brand-muted" />}
+                            </div>
+                            <div className="absolute inset-x-0 top-0 flex justify-end gap-1 p-1 opacity-0 group-hover:opacity-100 transition">
+                              <button className="h-6 w-6 grid place-items-center rounded-md bg-white/95 shadow-soft text-brand-muted hover:text-brand-green" onClick={() => insertFile(f)} title="Insert into report"><Plus size={14} /></button>
+                              {!clientFile && <button className="h-6 w-6 grid place-items-center rounded-md bg-white/95 shadow-soft text-brand-muted hover:text-up" onClick={() => removeUpload(f.id)} title="Remove"><Trash2 size={13} /></button>}
+                            </div>
+                            <div className="px-1.5 py-1 flex items-center gap-1">
+                              <span className="flex-1 truncate text-[11px]" title={f.name}>{f.name}</span>
+                              {clientFile && <span className="text-[8px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0" title="From this client’s media bank">client</span>}
+                              {f.extractedText && <span className="text-[8px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0" title="Text read for context">ctx</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-brand-muted">No files yet — upload a bill, LOA or image below.</p>
+                  )}
+                  <label className="btn-ghost w-full cursor-pointer justify-center !py-1.5 text-sm">
+                    {uploading ? <Loader2 size={15} className="animate-spin" /> : <Paperclip size={15} />} Upload file or image
+                    <input type="file" multiple className="hidden" onChange={(e) => { onUpload(e.target.files); e.target.value = ''; }} />
+                  </label>
+                  <p className="text-[11px] text-brand-muted">Drag any tile onto the page to insert it where you drop it; PDFs/Word are mined for context.</p>
+                </>
+              )}
             </div>
           </CollapsibleSection>
 
