@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, FileText, Mail, Paperclip, Plus, FilePlus2,
   StickyNote, Phone, ArrowRightCircle, CheckCircle2, Circle, Flag, RefreshCw, Trash2, ExternalLink,
-  Wand2, Lightbulb, Copy, Check, UploadCloud, Pencil,
+  Wand2, Lightbulb, Copy, Check, UploadCloud, Pencil, FileSignature,
 } from 'lucide-react';
 import {
   api, type ClientProfile, type ClientStage, type ClientFile, type ActivityType,
   type SourceKind, type NextStep, type ReportInputs,
 } from '../lib/api';
 import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, relativeTime, stageIndex } from '../lib/crm';
+import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '../lib/loa';
 
 const FIELDS: { key: keyof ReportInputs; label: string }[] = [
   { key: 'companyName', label: 'Company' },
@@ -374,6 +375,23 @@ export function ClientHub({
 
         {/* ── Side column ── */}
         <div className="space-y-4">
+          {/* Letter of Authority status */}
+          {(() => {
+            const { known, total } = loaCompleteness(deriveLoaFromClient(inputs));
+            const cv = (inputs as Record<string, unknown>).customerVariables as CustomerVariables | undefined;
+            return (
+              <section className="card p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-semibold flex items-center gap-1.5"><FileSignature size={14} className="text-brand-greenDark" /> Letter of Authority</h3>
+                  <span className={'text-[11px] font-medium ' + (known === total ? 'text-brand-green' : 'text-brand-muted')}>{known === total ? 'Ready' : `${known}/${total}`}</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-brand-line overflow-hidden mb-2"><div className="h-full bg-brand-green rounded-full" style={{ width: `${(known / total) * 100}%` }} /></div>
+                {cv?.fuel && <div className="text-xs text-brand-muted">Buys <span className="text-brand-ink capitalize">{cv.fuel === 'both' ? 'gas & electric' : cv.fuel}</span>{cv.services?.length ? ` · ${cv.services.slice(0, 3).join(', ')}` : ''}</div>}
+                <p className="text-[11px] text-brand-muted mt-1.5">Complete &amp; export in the <span className="text-brand-greenDark">Letters of Authority</span> section.</p>
+              </section>
+            );
+          })()}
+
           {/* Tracker */}
           <section className="card p-4">
             <h3 className="text-sm font-semibold mb-3">Tracker</h3>
