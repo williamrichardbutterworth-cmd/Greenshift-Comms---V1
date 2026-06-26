@@ -5,6 +5,7 @@ import { DailyReview } from './components/DailyReview';
 import { NewsFeed } from './components/NewsFeed';
 import { IdeasBoard } from './components/IdeasBoard';
 import { ClientsHome } from './components/ClientsHome';
+import { LoaSection } from './components/LoaSection';
 import { WorkspaceProvider, useWorkspace } from './workspace/WorkspaceContext';
 import { usePersisted } from './lib/usePersisted';
 
@@ -49,6 +50,7 @@ function Shell({ section, setSection, collapsed, onToggleCollapse }: {
           {section === 'brief' && <DailyReview />}
           {section === 'news' && <NewsFeed />}
           {section === 'report' && <ClientsHome />}
+          {section === 'loa' && <LoaSection />}
           {section === 'documents' && (
             <Suspense fallback={<div className="card p-10 text-center text-brand-muted">Loading workspace…</div>}>
               <DocumentsSection />

@@ -360,6 +360,23 @@ const postJson = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+// ── Letter of Authority + Companies House ──
+export interface LoaExtractResult {
+  fields: Record<string, string>;
+  fuel: 'gas' | 'electric' | 'both' | '';
+  services: string[];
+  companySummary: string;
+  provider: string;
+  error?: string;
+  url?: string;
+}
+export interface ChCompanySummary {
+  companyNumber: string; title: string; status: string; type: string; addressSnippet: string; incorporatedOn: string;
+}
+export interface ChCompanyProfile extends ChCompanySummary { registeredAddress: string; postcode: string; sicCodes: string[]; }
+export interface ChSearchResult { items: ChCompanySummary[]; provider: string; error?: string; }
+export interface ChCompanyResult { company: ChCompanyProfile | null; provider: string; error?: string; }
+
 export const api = {
   market: () => j<MarketSnapshot>('/api/market'),
   grid: () => j<GridSnapshot>('/api/grid'),
@@ -454,6 +471,15 @@ export const api = {
       j<ForwardCurveExtract>('/api/forward-curve/extract', postJson(input)),
     save: (input: NewForwardCurve) => j<ForwardCurveSnapshot>('/api/forward-curve', postJson(input)),
     remove: (id: string) => j<{ ok: boolean }>(`/api/forward-curve/${id}`, { method: 'DELETE' }),
+  },
+
+  // Letter of Authority — Companies House lookup, website scrape, field extraction.
+  loa: {
+    chStatus: () => j<{ configured: boolean }>('/api/companies-house/status'),
+    chSearch: (q: string) => j<ChSearchResult>(`/api/companies-house/search?q=${encodeURIComponent(q)}`),
+    chCompany: (number: string) => j<ChCompanyResult>(`/api/companies-house/company/${encodeURIComponent(number)}`),
+    scrape: (url: string, current?: Record<string, string>) => j<LoaExtractResult>('/api/loa/scrape', postJson({ url, current })),
+    extract: (text: string, current?: Record<string, string>) => j<LoaExtractResult>('/api/loa/extract', postJson({ text, current })),
   },
 
   // Mine a pasted call transcript for client details.
