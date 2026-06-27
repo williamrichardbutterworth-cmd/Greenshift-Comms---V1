@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, FileText, Mail, Paperclip, Plus, FilePlus2,
   StickyNote, Phone, ArrowRightCircle, CheckCircle2, Circle, Flag, RefreshCw, Trash2, ExternalLink,
-  Wand2, Lightbulb, Copy, Check, UploadCloud, Pencil, FileSignature,
+  Wand2, Lightbulb, Copy, Check, UploadCloud, FileSignature,
 } from 'lucide-react';
 import {
   api, type ClientProfile, type ClientStage, type ClientFile, type ActivityType,
@@ -13,16 +13,7 @@ import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '..
 import { ClientJourney } from './ClientJourney';
 import { EmailThread } from './EmailThread';
 import { CustomerVariablesEditor } from './CustomerVariablesEditor';
-
-const FIELDS: { key: keyof ReportInputs; label: string }[] = [
-  { key: 'companyName', label: 'Company' },
-  { key: 'clientName', label: 'Contact' },
-  { key: 'contact', label: 'Contact detail' },
-  { key: 'currentSupplier', label: 'Supplier' },
-  { key: 'contractEnd', label: 'Contract end' },
-  { key: 'consumption', label: 'Consumption' },
-  { key: 'sites', label: 'Sites / meters' },
-];
+import { ClientProfilePanel } from './ClientProfilePanel';
 
 const ACTIVITY_ICON: Record<ActivityType, typeof StickyNote> = {
   note: StickyNote, transcript: Phone, 'email-sent': Mail, 'email-received': Mail,
@@ -56,9 +47,7 @@ export function ClientHub({
   const [intakeKind, setIntakeKind] = useState<SourceKind>('transcript');
   const [analyzing, setAnalyzing] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [editing, setEditing] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
-  const editSnapshot = useRef<ReportInputs | null>(null);
 
   const loadFiles = useCallback(() => api.files.list({ clientProfileId: clientId }).then(setFiles).catch(() => {}), [clientId]);
 
@@ -173,10 +162,6 @@ export function ClientHub({
     catch { setErr('Couldn’t copy — select the text and copy manually.'); }
   };
 
-  const setField = (k: keyof ReportInputs, v: string) => setClient((c) => (c ? { ...c, inputs: { ...c.inputs, [k]: v } } : c));
-  const startEdit = () => { editSnapshot.current = { ...inputs }; setEditing(true); };
-  const cancelEdit = () => { if (editSnapshot.current) setClient((c) => (c ? { ...c, inputs: editSnapshot.current! } : c)); setEditing(false); };
-  const saveFields = async () => { await patch({ inputs }); setEditing(false); };
 
   const stageIdx = stageIndex(client.stage);
   const railStages = STAGES.filter((s) => s.key !== 'lost');
@@ -241,27 +226,6 @@ export function ClientHub({
           </div>
         </div>
 
-        {/* Key fields */}
-        <div className="px-5 py-4 border-t border-brand-line">
-          <div className="flex items-center justify-between mb-2">
-            <div className="label">Client details</div>
-            {editing
-              ? <span className="flex gap-2"><button className="btn-primary !py-1 text-xs" onClick={saveFields}>Save</button><button className="btn-ghost !py-1 text-xs" onClick={cancelEdit}>Cancel</button></span>
-              : <button className="text-xs text-brand-greenDark hover:underline inline-flex items-center gap-1" onClick={startEdit}><Pencil size={12} /> Edit</button>}
-          </div>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2.5">
-            {FIELDS.map((f) => (
-              <div key={f.key}>
-                <div className="text-[11px] uppercase tracking-wide text-brand-muted">{f.label}</div>
-                {editing ? (
-                  <input className="input !py-1 text-sm mt-0.5" value={inputs[f.key] ?? ''} onChange={(e) => setField(f.key, e.target.value)} />
-                ) : (
-                  <div className="text-sm text-brand-ink mt-0.5 truncate" title={inputs[f.key] || ''}>{inputs[f.key] || <span className="text-brand-muted">—</span>}</div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
       </section>
 
       {view === 'journey' ? (
@@ -280,6 +244,9 @@ export function ClientHub({
       <div className="grid lg:grid-cols-[1fr_320px] gap-4 items-start">
         {/* ── Main column ── */}
         <div className="space-y-4 min-w-0">
+          {/* Comprehensive client record */}
+          <ClientProfilePanel inputs={inputs} onSave={(next) => patch({ inputs: next })} />
+
           {/* Recommended next step */}
           <section className="card p-4 bg-gradient-to-br from-brand-tint to-white">
             <div className="flex items-center gap-2 mb-1.5">

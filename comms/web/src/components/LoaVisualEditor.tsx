@@ -1,6 +1,6 @@
 import { useState, type CSSProperties } from 'react';
 import { GripVertical } from 'lucide-react';
-import { LOA_FIELD_POS, LOA_PAGE_W, LOA_PAGE_H, type LoaFieldPos } from '../lib/loa';
+import { LOA_FIELD_POS, LOA_FIELDS, LOA_PAGE_W, LOA_PAGE_H, SOURCE_LABEL, type LoaFieldPos, type LoaData, type LoaSource } from '../lib/loa';
 
 // On-screen scale of the A4 template (pt → px). Coordinates are stored in pt and
 // shared with the pdf-lib fill, so what you edit/drag here is what lands in the PDF.
@@ -11,10 +11,16 @@ const LINE_PT = 13;
 // above it so the on-screen text lands on the same baseline as the PDF fill.
 const BASE_DY = LINE_PT * 0.78;
 
+const LABELS: Record<string, string> = { dated: 'Date', ...Object.fromEntries(LOA_FIELDS.map((f) => [f.key, f.label])) };
+const SOURCE_DOT: Record<LoaSource, string> = {
+  profile: 'bg-brand-green', transcript: 'bg-sky-500', website: 'bg-violet-500', companiesHouse: 'bg-emerald-600', manual: 'bg-brand-muted',
+};
+
 // A live, editable + draggable overlay of the real LOA template: the two template
 // pages shown as images with each customer field positioned exactly where it prints.
-export function LoaVisualEditor({ values, layout, onChange, onMove }: {
-  values: Record<string, string>;
+// Empty fields are flagged (amber), filled fields show where the value came from.
+export function LoaVisualEditor({ loa, layout, onChange, onMove }: {
+  loa: LoaData;
   layout: Record<string, { x: number; y: number }>;
   onChange: (key: string, value: string) => void;
   onMove: (key: string, x: number, y: number) => void;
@@ -30,13 +36,16 @@ export function LoaVisualEditor({ values, layout, onChange, onMove }: {
           <img src={`/loa-page-${pageNo}.png`} alt={`LOA page ${pageNo}`} draggable={false} className="absolute inset-0 w-full h-full select-none pointer-events-none rounded-sm" />
           {Object.entries(LOA_FIELD_POS).filter(([, p]) => p.page === pageNo).map(([key, pos]) => {
             const ov = layout[key];
+            const fv = loa[key];
             return (
               <FieldBox
                 key={key}
                 pos={pos}
+                label={LABELS[key] ?? key}
                 ptX={ov?.x ?? pos.x}
                 ptY={ov?.y ?? pos.vy}
-                value={values[key] ?? ''}
+                value={fv?.value ?? ''}
+                source={fv?.value?.trim() ? fv.source : undefined}
                 onChange={(v) => onChange(key, v)}
                 onMove={(x, y) => onMove(key, x, y)}
               />
@@ -49,11 +58,13 @@ export function LoaVisualEditor({ values, layout, onChange, onMove }: {
   );
 }
 
-function FieldBox({ pos, ptX, ptY, value, onChange, onMove }: {
+function FieldBox({ pos, label, ptX, ptY, value, source, onChange, onMove }: {
   pos: LoaFieldPos;
+  label: string;
   ptX: number;
   ptY: number;
   value: string;
+  source?: LoaSource;
   onChange: (v: string) => void;
   onMove: (x: number, y: number) => void;
 }) {
@@ -68,9 +79,13 @@ function FieldBox({ pos, ptX, ptY, value, onChange, onMove }: {
     window.addEventListener('mouseup', mu);
   };
 
+  const empty = !value.trim();
   const box: CSSProperties = { position: 'absolute', left: ptX * SCALE, top: (ptY - BASE_DY) * SCALE, width: pos.maxWidth * SCALE };
   const fontStyle: CSSProperties = { fontSize: FONT_PT * SCALE, lineHeight: `${LINE_PT * SCALE}px` };
-  const inputCls = 'w-full bg-transparent outline-none text-brand-ink placeholder:text-brand-muted/30 rounded-[3px] px-0.5 -mx-0.5 transition-colors hover:bg-brand-green/[0.07] focus:bg-brand-green/[0.09] focus:ring-1 focus:ring-brand-green/40';
+  const tone = empty
+    ? 'bg-amber-50/70 ring-1 ring-dashed ring-amber-400/70 placeholder:text-amber-600/60'
+    : 'hover:bg-brand-green/[0.07] placeholder:text-brand-muted/30';
+  const inputCls = `w-full bg-transparent outline-none text-brand-ink rounded-[3px] px-1 -mx-1 transition-colors focus:!bg-brand-green/[0.09] focus:ring-1 focus:ring-brand-green/50 ${tone}`;
 
   return (
     <div className={'group ' + (dragging ? 'z-20' : 'z-10')} style={box}>
@@ -82,12 +97,16 @@ function FieldBox({ pos, ptX, ptY, value, onChange, onMove }: {
       >
         <GripVertical size={Math.round(FONT_PT * SCALE * 1.15)} />
       </span>
+      {/* source-of-truth dot (filled) */}
+      {source && (
+        <span title={`From: ${SOURCE_LABEL[source]}`} className={'absolute -left-2 -top-1.5 h-2 w-2 rounded-full ring-2 ring-white ' + SOURCE_DOT[source]} />
+      )}
       {pos.multiline ? (
         <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={pos.maxLines ?? 3} spellCheck={false}
-          className={inputCls + ' resize-none block'} style={fontStyle} placeholder="…" />
+          className={inputCls + ' resize-none block'} style={fontStyle} placeholder={empty ? label : '…'} />
       ) : (
         <input value={value} onChange={(e) => onChange(e.target.value)} spellCheck={false}
-          className={inputCls + ' block'} style={{ ...fontStyle, height: LINE_PT * SCALE }} placeholder="…" />
+          className={inputCls + ' block'} style={{ ...fontStyle, height: LINE_PT * SCALE }} placeholder={empty ? label : '…'} />
       )}
     </div>
   );

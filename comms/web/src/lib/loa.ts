@@ -1,4 +1,4 @@
-import type { ReportInputs } from './api';
+import type { ReportInputs, ClientMeter } from './api';
 
 // ── Letter of Authority field model ──
 // The canonical customer fields the LOA needs. Values + provenance are stored on
@@ -33,9 +33,18 @@ export const SOURCE_LABEL: Record<LoaSource, string> = {
 };
 
 const looksEmail = (s: string) => /@/.test(s);
+const field = (inputs: ReportInputs, key: string): string => String((inputs as Record<string, unknown>)[key] ?? '').trim();
+const metersOf = (inputs: ReportInputs): ClientMeter[] => Array.isArray((inputs as Record<string, unknown>).meters) ? ((inputs as Record<string, unknown>).meters as ClientMeter[]) : [];
+const sitesOf = (meters: ClientMeter[]): string => {
+  const seen = new Set<string>(); const out: string[] = [];
+  for (const m of meters) { const s = (m.siteAddress ?? '').trim(); const k = s.toLowerCase(); if (s && !seen.has(k)) { seen.add(k); out.push(s); } }
+  return out.join('; ');
+};
 
-// Seed LOA fields from what the client profile already holds, so the builder
-// starts pre-filled. Saved inputs.loa values win; these are the fallbacks.
+// Seed LOA fields from the comprehensive client profile, so the builder starts as
+// complete as possible. Saved inputs.loa values win; these are the fallbacks.
+// Auto-fills MPAN/MPRN from the meters, "N/A" for a fuel they don't buy, and the
+// site address from the meters / business address.
 export function deriveLoaFromClient(inputs: ReportInputs): LoaData {
   const saved = ((inputs as Record<string, unknown>).loa as LoaData | undefined) ?? {};
   const out: LoaData = { ...saved };
@@ -44,12 +53,33 @@ export function deriveLoaFromClient(inputs: ReportInputs): LoaData {
     if (out[key]?.value?.trim()) return; // don't clobber a saved/edited value
     out[key] = { value: value.trim(), source };
   };
-  put('customerName', inputs.companyName, 'profile');
-  put('authorisedRep', inputs.clientName, 'profile');
-  put('signatoryName', inputs.clientName, 'profile');
-  put('siteAddresses', inputs.sites, 'profile');
-  if (inputs.contact && looksEmail(inputs.contact)) { put('email', inputs.contact, 'profile'); put('signatoryEmail', inputs.contact, 'profile'); }
-  else put('telephone', inputs.contact, 'profile');
+  const contact = field(inputs, 'contact');
+  const email = field(inputs, 'email') || (looksEmail(contact) ? contact : '');
+  const phone = field(inputs, 'telephone') || (!looksEmail(contact) ? contact : '');
+  const meters = metersOf(inputs);
+  const fuel = ((inputs as Record<string, unknown>).customerVariables as CustomerVariables | undefined)?.fuel;
+
+  put('customerName', field(inputs, 'companyName'), 'profile');
+  put('registeredNo', field(inputs, 'registeredNo'), 'profile');
+  put('businessAddress', field(inputs, 'businessAddress'), 'profile');
+  put('postcode', field(inputs, 'postcode'), 'profile');
+  put('telephone', phone, 'profile');
+  put('authorisedRep', field(inputs, 'clientName'), 'profile');
+  put('email', email, 'profile');
+  put('signatoryName', field(inputs, 'clientName'), 'profile');
+  put('position', field(inputs, 'position'), 'profile');
+  put('signatoryEmail', email, 'profile');
+
+  // Meters → MPAN (electricity) / MPRN (gas), with N/A for a fuel they don't buy.
+  const elec = meters.find((m) => m.type === 'electric' && (m.mpan ?? '').trim());
+  const gas = meters.find((m) => m.type === 'gas' && (m.mprn ?? '').trim());
+  if (elec?.mpan) put('mpan', elec.mpan, 'profile');
+  if (gas?.mprn) put('mpr', gas.mprn, 'profile');
+  if (fuel === 'gas') put('mpan', 'N/A', 'profile'); // no electricity
+  if (fuel === 'electric') put('mpr', 'N/A', 'profile'); // no gas
+
+  // Site address: the meters' sites, else the sites field, else the business address.
+  put('siteAddresses', sitesOf(meters) || field(inputs, 'sites') || field(inputs, 'businessAddress'), 'profile');
   return out;
 }
 

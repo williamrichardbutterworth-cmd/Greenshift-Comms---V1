@@ -216,16 +216,24 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
             <span className="text-[11px] text-brand-muted hidden sm:inline">— edit any field on the page; drag the handle to reposition</span>
             <button className="btn-ghost !py-1 !px-2 text-xs ml-auto" onClick={resetLayout} title="Reset all field positions"><RotateCcw size={12} /> Reset positions</button>
           </div>
-          <LoaVisualEditor values={loaValues(loa)} layout={layout} onChange={(k, v) => setField(k, v)} onMove={moveField} />
+          <LoaVisualEditor loa={loa} layout={layout} onChange={(k, v) => setField(k, v)} onMove={moveField} />
         </section>
 
         {/* Field list — provenance + precise editing */}
         <section className="card p-4 xl:sticky xl:top-[calc(var(--topbar-h)+16px)]">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold">Details</h3>
-            <span className="text-[11px] text-brand-muted">{missing.length ? `${missing.length} to fill` : 'all captured'}</span>
+            <span className={'text-[11px] font-medium ' + (missing.length ? 'text-amber-600' : 'text-brand-green')}>{missing.length ? `${missing.length} to fill` : 'all captured'}</span>
           </div>
-          <div className="space-y-3.5 max-h-[70vh] overflow-y-auto pr-1">
+          {missing.length > 0 && (
+            <div className="mb-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+              <div className="text-[11px] font-medium text-amber-700 mb-1.5">Still needed to complete the LOA</div>
+              <div className="flex flex-wrap gap-1">
+                {missing.map((k) => <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-white border border-amber-200 text-amber-700">{LOA_FIELDS.find((f) => f.key === k)?.label ?? k}</span>)}
+              </div>
+            </div>
+          )}
+          <div className="space-y-3.5 max-h-[60vh] overflow-y-auto pr-1">
             {LOA_GROUPS.map((group) => (
               <div key={group}>
                 <div className="label mb-1.5">{group}</div>
@@ -253,6 +261,14 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
                 </div>
               </div>
             ))}
+          </div>
+          <div className="mt-3 pt-3 border-t border-brand-line">
+            <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">Source of truth</div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-brand-muted">
+              {([['bg-brand-green', 'Client'], ['bg-sky-500', 'Conversation'], ['bg-violet-500', 'Website'], ['bg-emerald-600', 'Companies House'], ['bg-brand-muted', 'Manual']] as const).map(([c, l]) => (
+                <span key={l} className="inline-flex items-center gap-1"><span className={'h-2 w-2 rounded-full ' + c} /> {l}</span>
+              ))}
+            </div>
           </div>
         </section>
       </div>
