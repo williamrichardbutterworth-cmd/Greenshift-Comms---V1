@@ -12,6 +12,7 @@ import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, relativeTime, stageIndex
 import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '../lib/loa';
 import { ClientJourney } from './ClientJourney';
 import { EmailThread } from './EmailThread';
+import { CustomerVariablesEditor } from './CustomerVariablesEditor';
 
 const FIELDS: { key: keyof ReportInputs; label: string }[] = [
   { key: 'companyName', label: 'Company' },
@@ -417,6 +418,12 @@ export function ClientHub({
               </section>
             );
           })()}
+
+          {/* What they buy — client attribute that tailors reports */}
+          <CustomerVariablesEditor
+            value={((inputs as Record<string, unknown>).customerVariables as CustomerVariables | undefined) ?? {}}
+            onChange={(cv) => patch({ inputs: { ...inputs, customerVariables: cv } as ReportInputs })}
+          />
 
           {/* Tracker */}
           <section className="card p-4">

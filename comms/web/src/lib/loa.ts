@@ -61,26 +61,41 @@ export function loaCompleteness(data: LoaData): { known: number; total: number; 
   return { known: LOA_FIELDS.length - missing.length, total: LOA_FIELDS.length, missing };
 }
 
-// ── PDF fill (pdf-lib overlay on the actual stored template) ──
-// Coordinates measured from the real template (A4 595×842pt, top-left origin):
-// value column x≈200 on page 1, signature line positions on page 2.
-const PAGE_H = 842;
-// page 1 fields: pymupdf label top-y → we draw the value on that line at x=200.
-const P1: Record<string, { y0: number; multiline?: boolean; maxLines?: number }> = {
-  customerName: { y0: 188 }, registeredNo: { y0: 219 },
-  businessAddress: { y0: 243, multiline: true, maxLines: 3 }, postcode: { y0: 303 },
-  telephone: { y0: 335 }, authorisedRep: { y0: 367 }, email: { y0: 398 },
-  mpan: { y0: 430 }, mpr: { y0: 461 }, siteAddresses: { y0: 484, multiline: true, maxLines: 4 },
-};
-// page 2 signature line: {x, y0}
-const P2: Record<string, { x: number; y0: number }> = {
-  signatoryName: { x: 363, y0: 577 }, position: { x: 82, y0: 640 },
-  signatoryEmail: { x: 365, y0: 640 }, dated: { x: 85, y0: 689 },
-};
-const P1_X = 200;
-const P1_MAXW = 350;
+// ── LOA template geometry (the real 2-page A4 template, 595×842pt, top-left origin) ──
+// One unified position map drives BOTH the on-screen visual editor and the pdf-lib
+// fill, so what you drag/edit is what lands in the PDF. `x,y` is the top-left of the
+// value (y is the label line top); `maxWidth` caps single-line text (it shrinks to
+// fit) and wraps multi-line. Per-page background images: /loa-page-{1,2}.png.
+export const LOA_PAGE_W = 595;
+export const LOA_PAGE_H = 842;
 const FONT_SIZE = 10;
 const LINE_H = 13;
+const TEXT_BASELINE_DY = 9; // value baseline sits ~9pt below the label-line top
+
+export interface LoaFieldPos { page: 1 | 2; x: number; y: number; maxWidth: number; multiline?: boolean; maxLines?: number }
+export const LOA_FIELD_POS: Record<string, LoaFieldPos> = {
+  // page 1 — customer details (value column x≈200)
+  customerName: { page: 1, x: 200, y: 188, maxWidth: 235 }, // "(I/we/us)" sits ~x=445
+  registeredNo: { page: 1, x: 200, y: 219, maxWidth: 360 },
+  businessAddress: { page: 1, x: 200, y: 243, maxWidth: 355, multiline: true, maxLines: 3 },
+  postcode: { page: 1, x: 200, y: 303, maxWidth: 200 },
+  telephone: { page: 1, x: 200, y: 335, maxWidth: 250 },
+  authorisedRep: { page: 1, x: 200, y: 367, maxWidth: 355 },
+  email: { page: 1, x: 200, y: 398, maxWidth: 355 },
+  mpan: { page: 1, x: 200, y: 430, maxWidth: 250 },
+  mpr: { page: 1, x: 200, y: 461, maxWidth: 250 },
+  siteAddresses: { page: 1, x: 200, y: 484, maxWidth: 355, multiline: true, maxLines: 4 },
+  // page 2 — signature block
+  signatoryName: { page: 2, x: 363, y: 577, maxWidth: 175 },
+  position: { page: 2, x: 82, y: 640, maxWidth: 200 },
+  signatoryEmail: { page: 2, x: 365, y: 640, maxWidth: 175 },
+  dated: { page: 2, x: 85, y: 689, maxWidth: 200 },
+};
+
+export const todayLong = (): string => new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+// `dated` defaults to today; the editor seeds it but the fill is the safety net.
+export const loaValueFor = (values: Record<string, string>, key: string): string =>
+  key === 'dated' ? ((values.dated ?? '').trim() || todayLong()) : (values[key] ?? '').trim();
 
 function wrap(text: string, font: import('pdf-lib').PDFFont, size: number, maxW: number, maxLines: number): string[] {
   const words = text.split(/\s+/);
@@ -96,31 +111,34 @@ function wrap(text: string, font: import('pdf-lib').PDFFont, size: number, maxW:
   return lines.slice(0, maxLines);
 }
 
-// Returns the filled PDF bytes. `dated` defaults to today (en-GB long).
-export async function fillLoaPdf(values: Record<string, string>, templateUrl = '/loa-template.pdf'): Promise<Uint8Array> {
+// Returns the filled PDF bytes. `positions` overrides any field's {x,y} (drag).
+export async function fillLoaPdf(
+  values: Record<string, string>,
+  opts?: { positions?: Record<string, { x: number; y: number }>; templateUrl?: string },
+): Promise<Uint8Array> {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
-  const bytes = await (await fetch(templateUrl)).arrayBuffer();
+  const bytes = await (await fetch(opts?.templateUrl ?? '/loa-template.pdf')).arrayBuffer();
   const pdf = await PDFDocument.load(bytes);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const [page1, page2] = pdf.getPages();
+  const pages = pdf.getPages();
   const ink = rgb(0.09, 0.09, 0.11);
-  const draw = (page: import('pdf-lib').PDFPage, text: string, x: number, y0: number) =>
-    page.drawText(text, { x, y: PAGE_H - (y0 + 9), size: FONT_SIZE, font, color: ink });
 
-  for (const [key, pos] of Object.entries(P1)) {
-    const v = (values[key] ?? '').trim();
-    if (!v || !page1) continue;
+  for (const [key, pos] of Object.entries(LOA_FIELD_POS)) {
+    const v = loaValueFor(values, key);
+    const page = pages[pos.page - 1];
+    if (!v || !page) continue;
+    const ov = opts?.positions?.[key];
+    const x = ov ? ov.x : pos.x;
+    const y0 = ov ? ov.y : pos.y;
     if (pos.multiline) {
-      wrap(v, font, FONT_SIZE, P1_MAXW, pos.maxLines ?? 3).forEach((line, i) => draw(page1, line, P1_X, pos.y0 + i * LINE_H));
+      wrap(v, font, FONT_SIZE, pos.maxWidth, pos.maxLines ?? 3)
+        .forEach((line, i) => page.drawText(line, { x, y: LOA_PAGE_H - (y0 + TEXT_BASELINE_DY + i * LINE_H), size: FONT_SIZE, font, color: ink }));
     } else {
-      draw(page1, v, P1_X, pos.y0);
+      // Shrink single-line text to fit its column so nothing overruns the box.
+      let size = FONT_SIZE;
+      while (size > 7 && font.widthOfTextAtSize(v, size) > pos.maxWidth) size -= 0.5;
+      page.drawText(v, { x, y: LOA_PAGE_H - (y0 + TEXT_BASELINE_DY), size, font, color: ink });
     }
-  }
-  const dated = (values.dated ?? '').trim() || new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
-  for (const [key, pos] of Object.entries(P2)) {
-    const v = key === 'dated' ? dated : (values[key] ?? '').trim();
-    if (!v || !page2) continue;
-    draw(page2, v, pos.x, pos.y0);
   }
   return pdf.save();
 }
