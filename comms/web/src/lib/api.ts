@@ -377,6 +377,19 @@ export interface ChCompanyProfile extends ChCompanySummary { registeredAddress: 
 export interface ChSearchResult { items: ChCompanySummary[]; provider: string; error?: string; }
 export interface ChCompanyResult { company: ChCompanyProfile | null; provider: string; error?: string; }
 
+// ── Comprehensive client intake (website + transcript + bills → profile) ──
+export interface ClientMeter { type: 'electric' | 'gas'; mpan?: string; mprn?: string; siteAddress?: string; supplier?: string; contractEnd?: string; consumption?: string; }
+export interface ClientIntakeResult {
+  companyName: string; registeredNo: string; businessAddress: string; postcode: string; industry: string;
+  contactName: string; position: string; email: string; telephone: string;
+  fuel: '' | 'gas' | 'electric' | 'both';
+  currentSupplier: string; contractEnd: string; consumption: string;
+  meters: ClientMeter[]; services: string[]; companySummary: string;
+  summary: string; points: string[]; angles: string[]; suggestedMilestones: string[];
+  websiteUrl: string; provider: string; error?: string;
+}
+export interface ClientIntakePayload { website?: string; transcript?: string; fileTexts?: string[]; images?: { base64: string; mime?: string }[]; }
+
 // ── Email dialogue ──
 export interface EmailMsg { direction: 'in' | 'out'; subject?: string; body: string; at?: string; }
 export interface EmailDraft { subject: string; body: string; provider: string; error?: string; }
@@ -490,6 +503,11 @@ export const api = {
   // Email dialogue — draft the next email/response in a client thread.
   email: {
     draft: (payload: EmailDraftPayload) => j<EmailDraft>('/api/email/draft', postJson(payload)),
+  },
+
+  // Comprehensive new-client intake (website + transcript + bills → one profile).
+  client: {
+    intake: (payload: ClientIntakePayload) => j<ClientIntakeResult>('/api/client/intake', postJson(payload)),
   },
 
   // Mine a pasted call transcript for client details.

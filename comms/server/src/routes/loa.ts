@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { companiesHouseConfigured } from '../config';
 import { searchCompanies, getCompany } from '../services/companiesHouse';
 import { extractLoaFields, scrapeCompanyWebsite } from '../services/loaIntel';
+import { clientIntake } from '../services/clientIntake';
 
 // Letter-of-Authority intelligence: Companies House verification, company-website
 // scrape, and AI extraction of LOA fields from free text. All endpoints degrade
@@ -29,5 +30,11 @@ export async function loaRoutes(app: FastifyInstance): Promise<void> {
     const body = (req.body ?? {}) as { text?: string; current?: Record<string, string> };
     if (!body.text?.trim()) { reply.code(400); return { error: 'Some text to read is required.' }; }
     return extractLoaFields(body.text, body.current, false);
+  });
+
+  // Comprehensive new-client intake from website + transcript + uploaded bills.
+  app.post('/api/client/intake', async (req) => {
+    const b = (req.body ?? {}) as { website?: string; transcript?: string; fileTexts?: string[]; images?: { base64: string; mime?: string }[] };
+    return clientIntake(b);
   });
 }

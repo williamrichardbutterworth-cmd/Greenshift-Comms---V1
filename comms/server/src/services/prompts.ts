@@ -510,3 +510,51 @@ Return ONLY JSON in exactly this shape:
 Rules: Use ONLY the details and conversation provided — never invent prices, figures, dates or commitments. Hedged, professional UK English; this is general commentary, not a quotation or advice. Keep it concise and human. The agent will review and edit before sending.`,
   };
 }
+
+// ── Comprehensive client intake — one structured profile from all sources ──
+export interface ClientMeter {
+  type: 'electric' | 'gas';
+  mpan?: string; mprn?: string; siteAddress?: string; supplier?: string; contractEnd?: string; consumption?: string;
+}
+
+export function clientIntakePrompt(
+  sources: { website?: string; transcript?: string; fileTexts?: string[]; hasImages?: boolean },
+) {
+  const blocks: string[] = [];
+  if (sources.website) blocks.push(`COMPANY WEBSITE TEXT:\n"""\n${sources.website.slice(0, 9000)}\n"""`);
+  if (sources.transcript) blocks.push(`CALL TRANSCRIPT (e.g. Dialpad — may include the customer's phone number):\n"""\n${sources.transcript.slice(0, 12000)}\n"""`);
+  (sources.fileTexts ?? []).forEach((t, i) => { if (t?.trim()) blocks.push(`UPLOADED DOCUMENT ${i + 1} (e.g. an energy bill):\n"""\n${t.slice(0, 6000)}\n"""`); });
+  if (sources.hasImages) blocks.push('One or more images are attached (e.g. a photographed energy bill) — read any energy/meter/company details from them.');
+
+  return {
+    system: HOUSE_RULES,
+    prompt: `You are setting up a new UK business energy customer for Green Shift Energy. Read ALL the sources below and extract ONE comprehensive client profile.
+
+${blocks.join('\n\n') || '(no sources provided)'}
+
+Return ONLY JSON in exactly this shape (use "" / [] when something genuinely isn't in the sources — never invent):
+{
+  "companyName": "", "registeredNo": "", "businessAddress": "", "postcode": "", "industry": "",
+  "contactName": "", "position": "", "email": "", "telephone": "",
+  "fuel": "",
+  "currentSupplier": "", "contractEnd": "", "consumption": "",
+  "meters": [
+    { "type": "electric", "mpan": "", "mprn": "", "siteAddress": "", "supplier": "", "contractEnd": "", "consumption": "" }
+  ],
+  "services": [],
+  "companySummary": "",
+  "summary": "",
+  "points": [],
+  "angles": [],
+  "suggestedMilestones": []
+}
+
+Guidance:
+- fuel: one of "gas" | "electric" | "both" | "" — what energy they buy, if discernible.
+- meters: one entry PER METER found (across multiple sites if mentioned). type is "electric" (has an MPAN) or "gas" (has an MPRN/MPR). Capture per-meter siteAddress, supplier, contractEnd and consumption when stated — energy bills usually list these. MPAN = the long electricity supply number; MPRN/MPR = the gas meter point reference.
+- telephone: prefer a number stated in the transcript (Dialpad shows the caller's number); else from the website.
+- companySummary: 2-3 plain-English sentences on what the company does (from the website).
+- summary: one line capturing where this prospect is. points: the key facts gathered. angles: client-specific conversational hooks for the next call. suggestedMilestones: any of billReceived, loaSent, loaReturned, quotesGathered, proposalSent, signed that the sources clearly evidence.
+- Use ONLY what's in the sources. UK English. Never invent a company number, MPAN, MPRN, postcode or price.`,
+  };
+}

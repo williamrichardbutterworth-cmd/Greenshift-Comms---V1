@@ -68,16 +68,21 @@ function normaliseUrl(url: string): string {
   return /^https?:\/\//i.test(u) ? u : `https://${u}`;
 }
 
-export async function scrapeCompanyWebsite(url: string, current?: Record<string, string>): Promise<LoaExtract & { url: string }> {
+// Fetch + strip a company website to readable text. Returns '' on any failure.
+export async function fetchWebsiteText(url: string): Promise<{ url: string; text: string; error?: string }> {
   const target = normaliseUrl(url);
-  if (!target) return { ...EMPTY, url: '' };
-  let text = '';
+  if (!target) return { url: '', text: '' };
   try {
     const html = await fetchText(target, { headers: { 'User-Agent': 'Mozilla/5.0 (GreenShiftComms; +https://greenshiftenergy.co.uk)' } }, 12000);
-    text = htmlToText(html);
+    return { url: target, text: htmlToText(html) };
   } catch (e) {
-    return { ...EMPTY, url: target, provider: 'error', error: `Couldn’t fetch the site: ${(e as Error).message}` };
+    return { url: target, text: '', error: `Couldn’t fetch the site: ${(e as Error).message}` };
   }
+}
+
+export async function scrapeCompanyWebsite(url: string, current?: Record<string, string>): Promise<LoaExtract & { url: string }> {
+  const { url: target, text, error } = await fetchWebsiteText(url);
+  if (error) return { ...EMPTY, url: target, provider: 'error', error };
   if (!text) return { ...EMPTY, url: target, provider: 'error', error: 'No readable content found on that page.' };
   const out = await extractLoaFields(text, current, true);
   return { ...out, url: target };
