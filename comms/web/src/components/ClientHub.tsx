@@ -1,38 +1,35 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ArrowLeft, Building2, Sparkles, Loader2, FileText, Mail, Paperclip, Plus, FilePlus2,
-  StickyNote, Phone, ArrowRightCircle, CheckCircle2, Circle, Flag, RefreshCw, Trash2, ExternalLink,
+  ArrowLeft, Building2, Sparkles, Loader2, FileText, Paperclip, Plus, FilePlus2,
+  Phone, CheckCircle2, Circle, RefreshCw, Trash2, ExternalLink,
   Wand2, Lightbulb, Copy, Check, UploadCloud, FileSignature,
 } from 'lucide-react';
 import {
   api, type ClientProfile, type ClientStage, type ClientFile, type ActivityType,
   type SourceKind, type NextStep, type ReportInputs,
 } from '../lib/api';
-import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, relativeTime, stageIndex } from '../lib/crm';
+import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, stageIndex } from '../lib/crm';
 import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '../lib/loa';
 import { ClientJourney } from './ClientJourney';
 import { EmailThread } from './EmailThread';
 import { ClientProfilePanel } from './ClientProfilePanel';
 
-const ACTIVITY_ICON: Record<ActivityType, typeof StickyNote> = {
-  note: StickyNote, transcript: Phone, 'email-sent': Mail, 'email-received': Mail,
-  document: FileText, file: Paperclip, stage: ArrowRightCircle, milestone: Flag, recommendation: Sparkles,
-};
 const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader(); r.onload = () => res((r.result as string).split(',')[1] ?? ''); r.onerror = rej; r.readAsDataURL(file);
 });
 
-// The CRM client hub — everything about one client in one place: stage & tracker,
-// an AI next-step, a client-specific "talk track", the dialogue timeline, intake
-// (paste/upload) and a media bank of their documents.
+// The CRM client hub — everything about one client in one place. The Overview is a
+// deal cockpit: the next step, the talk-track call points and a live-call log up top;
+// the full client record beside the LOA tracker; the milestone tracker + media below.
 export function ClientHub({
-  clientId, onBack, onStartDocument, onDraftFromAngles, onOpenProject,
+  clientId, onBack, onStartDocument, onDraftFromAngles, onOpenProject, onOpenLoa,
 }: {
   clientId: string;
   onBack: () => void;
   onStartDocument: (client: ClientProfile, templateId?: string) => void;
   onDraftFromAngles: (client: ClientProfile, angles: string[]) => void;
   onOpenProject: (projectId: string) => void;
+  onOpenLoa: (clientId: string) => void;
 }) {
   const [client, setClient] = useState<ClientProfile | null>(null);
   const [files, setFiles] = useState<ClientFile[]>([]);
@@ -80,8 +77,8 @@ export function ClientHub({
     return out;
   }, [client]);
 
-  if (err && !client) return <div className="max-w-6xl mx-auto"><button className="btn-ghost mb-3" onClick={onBack}><ArrowLeft size={15} /> Back</button><p className="text-sm text-up" role="alert">{err}</p></div>;
-  if (!client) return <div className="max-w-6xl mx-auto"><Loader2 className="animate-spin text-brand-green mt-10 mx-auto" size={22} /></div>;
+  if (err && !client) return <div className="max-w-wide mx-auto"><button className="btn-ghost mb-3" onClick={onBack}><ArrowLeft size={15} /> Back</button><p className="text-sm text-up" role="alert">{err}</p></div>;
+  if (!client) return <div className="max-w-wide mx-auto"><Loader2 className="animate-spin text-brand-green mt-10 mx-auto" size={22} /></div>;
 
   const inputs = client.inputs as ReportInputs;
   const docActivities = client.activities.filter((a) => a.type === 'document' && a.meta?.projectId);
@@ -161,12 +158,11 @@ export function ClientHub({
     catch { setErr('Couldn’t copy — select the text and copy manually.'); }
   };
 
-
   const stageIdx = stageIndex(client.stage);
   const railStages = STAGES.filter((s) => s.key !== 'lost');
 
   return (
-    <div className="max-w-6xl mx-auto space-y-4">
+    <div className="max-w-wide mx-auto space-y-4">
       <div className="flex items-center justify-between gap-3">
         <button className="btn-ghost !py-1.5 !px-2" onClick={onBack}><ArrowLeft size={15} /> All clients</button>
         <div className="inline-flex rounded-lg border border-brand-line bg-white p-0.5 text-sm">
@@ -203,7 +199,7 @@ export function ClientHub({
                   <Wand2 size={15} /> Do next step
                 </button>
               ) : (
-                <button className="btn-primary !py-1.5" onClick={() => onStartDocument(client)}><FilePlus2 size={15} /> New document</button>
+                <button className="btn-primary !py-1.5" onClick={() => onStartDocument(client)}><FilePlus2 size={15} /> New report</button>
               )}
             </div>
           </div>
@@ -224,7 +220,6 @@ export function ClientHub({
             {client.stage === 'lost' && <div className="self-start text-[11px] px-2 py-0.5 rounded-full bg-up/10 text-up">Lost</div>}
           </div>
         </div>
-
       </section>
 
       {view === 'journey' ? (
@@ -240,91 +235,90 @@ export function ClientHub({
       ) : view === 'emails' ? (
         <EmailThread client={client} inputs={inputs} angles={angles} logActivity={logActivity} />
       ) : (
-      <div className="grid lg:grid-cols-[1fr_320px] gap-4 items-start">
-        {/* ── Main column ── */}
-        <div className="space-y-4 min-w-0">
-          {/* Comprehensive client record */}
-          <ClientProfilePanel inputs={inputs} onSave={(next) => patch({ inputs: next })} />
-
-          {/* Recommended next step */}
-          <section className="card p-4 bg-gradient-to-br from-brand-tint to-white">
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/15 text-brand-greenDark"><Sparkles size={13} /></span>
-              <h3 className="text-sm font-semibold">Recommended next step</h3>
-              <button className="ml-auto text-brand-muted hover:text-brand-ink" onClick={() => recommend(client)} title="Refresh recommendation" disabled={nextLoading}>
-                <RefreshCw size={13} className={nextLoading ? 'animate-spin' : ''} />
-              </button>
-            </div>
-            {nextLoading ? <p className="text-sm text-brand-muted">Thinking…</p>
-              : next?.action ? (
-                <div className="flex flex-wrap items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">{next.action}</p>
-                    {next.rationale && <p className="text-[13px] text-brand-muted mt-0.5 leading-snug">{next.rationale}</p>}
-                  </div>
-                  {next.templateId && (
-                    <button className="btn-primary !py-1.5 text-sm shrink-0" onClick={() => onStartDocument(client, next.templateId)}>
-                      <Wand2 size={14} /> Create this
+      <div className="space-y-4">
+        {/* ── Deal cockpit: move this deal forward ── */}
+        <div className="grid lg:grid-cols-[1.5fr_1fr] gap-4 items-start">
+          {/* Left: next step + talk track call-points */}
+          <div className="space-y-4 min-w-0">
+            <section className="card p-4 bg-gradient-to-br from-brand-tint to-white">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/15 text-brand-greenDark"><Sparkles size={13} /></span>
+                <h3 className="text-sm font-semibold">Recommended next step</h3>
+                <button className="ml-auto text-brand-muted hover:text-brand-ink" onClick={() => recommend(client)} title="Refresh recommendation" disabled={nextLoading}>
+                  <RefreshCw size={13} className={nextLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+              {nextLoading ? <p className="text-sm text-brand-muted">Thinking…</p>
+                : next?.action ? (
+                  <div className="flex flex-wrap items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{next.action}</p>
+                      {next.rationale && <p className="text-[13px] text-brand-muted mt-0.5 leading-snug">{next.rationale}</p>}
+                    </div>
+                    <button className="btn-primary !py-1.5 text-sm shrink-0" onClick={() => onStartDocument(client, next.templateId || undefined)}>
+                      <Wand2 size={14} /> {next.templateId ? 'Create this' : 'New report'}
                     </button>
-                  )}
-                </div>
-              ) : (
-                <p className="text-sm text-brand-muted">
-                  {next?.provider === 'none' ? 'Recommendations need automatic drafting configured.'
-                    : next?.provider === 'error' ? 'Couldn’t fetch a recommendation — try Refresh.'
-                    : 'No recommendation yet — log some activity below.'}
-                </p>
-              )}
-          </section>
+                  </div>
+                ) : (
+                  <p className="text-sm text-brand-muted">
+                    {next?.provider === 'none' ? 'Recommendations need automatic drafting configured.'
+                      : next?.provider === 'error' ? 'Couldn’t fetch a recommendation — try Refresh.'
+                      : 'No recommendation yet — log a call below.'}
+                  </p>
+                )}
+            </section>
 
-          {/* Talk track — client-specific angles */}
-          {angles.length > 0 && (
             <section className="card p-4">
               <div className="flex items-center gap-2 mb-2.5">
                 <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/10 text-brand-greenDark"><Lightbulb size={13} /></span>
                 <h3 className="text-sm font-semibold">Talk track</h3>
-                <span className="text-[11px] text-brand-muted hidden sm:inline">— angles for this client, gathered from your conversations</span>
-                <button className="btn-ghost !py-1 !px-2 text-xs ml-auto shrink-0" onClick={() => onDraftFromAngles(client, angles)} title="Draft a follow-up email built on these angles">
-                  <Sparkles size={13} /> Draft follow-up
-                </button>
+                <span className="text-[11px] text-brand-muted hidden sm:inline">— call points for this client</span>
+                {angles.length > 0 && (
+                  <button className="btn-ghost !py-1 !px-2 text-xs ml-auto shrink-0" onClick={() => onDraftFromAngles(client, angles)} title="Draft a follow-up email built on these angles">
+                    <Sparkles size={13} /> Draft follow-up
+                  </button>
+                )}
               </div>
-              <ul className="space-y-1.5">
-                {angles.map((ang) => (
-                  <li key={ang} className="group flex items-start gap-2 rounded-lg px-2.5 py-2 bg-brand-tint/60 hover:bg-brand-tint transition">
-                    <span className="text-brand-green mt-0.5 shrink-0">›</span>
-                    <span className="text-[13px] leading-snug flex-1">{ang}</span>
-                    <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-greenDark shrink-0 transition" onClick={() => copyAngle(ang)} title="Copy">
-                      {copied === ang ? <Check size={13} className="text-brand-green" /> : <Copy size={13} />}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              {angles.length > 0 ? (
+                <ul className="space-y-1.5">
+                  {angles.map((ang) => (
+                    <li key={ang} className="group flex items-start gap-2 rounded-lg px-2.5 py-2 bg-brand-tint/60 hover:bg-brand-tint transition">
+                      <span className="text-brand-green mt-0.5 shrink-0">›</span>
+                      <span className="text-[13px] leading-snug flex-1">{ang}</span>
+                      <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-greenDark shrink-0 transition" onClick={() => copyAngle(ang)} title="Copy">
+                        {copied === ang ? <Check size={13} className="text-brand-green" /> : <Copy size={13} />}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-brand-muted">No call points yet — log a call or paste a transcript and we’ll gather talking points for the next conversation.</p>
+              )}
             </section>
-          )}
+          </div>
 
-          {/* Log an update */}
-          <section className="card p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <h3 className="text-sm font-semibold">Log an update</h3>
-              <span className="text-[11px] text-brand-muted">— paste a transcript, email or bill; it’s read, filed and used to update the client</span>
+          {/* Right: live-call log / capture */}
+          <section className="card p-4 lg:sticky lg:top-[calc(var(--topbar-h)+16px)]">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/15 text-brand-greenDark"><Phone size={13} /></span>
+              <h3 className="text-sm font-semibold">Log this call</h3>
             </div>
-            <div className="flex gap-2 mb-2">
+            <p className="text-[11px] text-brand-muted mb-2.5">Paste a transcript, email or bill — it’s read, filed, and the client record + tracker update automatically.</p>
+            <div className="flex gap-1.5 mb-2">
               {(['transcript', 'email', 'bill'] as SourceKind[]).map((k) => (
                 <button key={k} onClick={() => setIntakeKind(k)} aria-pressed={intakeKind === k} className={'text-xs px-2.5 py-1 rounded-lg border capitalize transition ' + (intakeKind === k ? 'border-brand-green bg-brand-tint text-brand-ink font-medium' : 'border-brand-line text-brand-muted hover:text-brand-ink')}>{k}</button>
               ))}
             </div>
-            <textarea className="input min-h-[84px] text-sm" placeholder="Paste the transcript / email / bill text here…" value={intakeText} onChange={(e) => setIntakeText(e.target.value)} />
+            <textarea className="input min-h-[150px] text-sm" placeholder="Paste the transcript / email / bill text here, or type live notes during the call…" value={intakeText} onChange={(e) => setIntakeText(e.target.value)} />
             <div className="flex items-center gap-2 mt-2">
-              <button className="btn-primary !py-1.5 text-sm" onClick={analyzePasted} disabled={analyzing || !intakeText.trim()}>
+              <button className="btn-primary !py-1.5 text-sm flex-1 justify-center" onClick={analyzePasted} disabled={analyzing || !intakeText.trim()}>
                 {analyzing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} {analyzing ? 'Reading…' : 'Read & log'}
               </button>
               <label className="btn-ghost !py-1.5 text-sm cursor-pointer">
-                {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />} Upload document
+                {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />} Upload
                 <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAndAnalyze(f); e.target.value = ''; }} />
               </label>
             </div>
-
-            {/* Manual quick-log — separated from the AI composer for a cleaner panel */}
             <div className="mt-3 pt-3 border-t border-brand-line flex items-center gap-1.5 flex-wrap">
               <span className="label mr-0.5">Quick log</span>
               {QUICK_LOG.map((q) => (
@@ -332,43 +326,12 @@ export function ClientHub({
               ))}
             </div>
           </section>
-
-          {/* Timeline */}
-          <section className="card p-4">
-            <h3 className="text-sm font-semibold mb-3">Activity timeline</h3>
-            <ol className="relative">
-              {client.activities.map((a, i) => {
-                const Icon = ACTIVITY_ICON[a.type] ?? StickyNote;
-                const isDoc = a.type === 'document' && !!a.meta?.projectId;
-                const last = i === client.activities.length - 1;
-                return (
-                  <li key={a.id} className="relative flex gap-3 pb-4 last:pb-0">
-                    {!last && <span className="absolute left-[13px] top-7 bottom-0 w-px bg-brand-line" aria-hidden="true" />}
-                    <span className="grid place-items-center h-[26px] w-[26px] rounded-full bg-brand-tint text-brand-greenDark shrink-0 ring-2 ring-white z-[1]"><Icon size={13} /></span>
-                    <div className="min-w-0 flex-1 pt-0.5">
-                      <div className="flex items-baseline gap-2">
-                        {isDoc ? (
-                          <button type="button" className="text-sm text-left text-brand-greenDark hover:underline font-medium" onClick={() => onOpenProject(String(a.meta!.projectId))}>
-                            {a.title}<ExternalLink size={11} className="inline ml-1 -mt-0.5" />
-                          </button>
-                        ) : (
-                          <span className="text-sm text-brand-ink">{a.title}</span>
-                        )}
-                        <span className="text-[11px] text-brand-muted ml-auto shrink-0">{relativeTime(a.at)}</span>
-                      </div>
-                      {a.detail && <p className="text-xs text-brand-muted mt-1 whitespace-pre-line leading-relaxed">{a.detail}</p>}
-                    </div>
-                  </li>
-                );
-              })}
-              {!client.activities.length && <li className="text-sm text-brand-muted">No activity yet — log an update above.</li>}
-            </ol>
-          </section>
         </div>
 
-        {/* ── Side column ── */}
-        <div className="space-y-4">
-          {/* Letter of Authority status */}
+        {/* ── Client record + Letter of Authority ── */}
+        <div className="grid lg:grid-cols-[1fr_300px] gap-4 items-start">
+          <ClientProfilePanel inputs={inputs} onSave={(nextInputs) => patch({ inputs: nextInputs })} />
+
           {(() => {
             const { known, total } = loaCompleteness(deriveLoaFromClient(inputs));
             const cv = (inputs as Record<string, unknown>).customerVariables as CustomerVariables | undefined;
@@ -379,16 +342,21 @@ export function ClientHub({
                   <span className={'text-[11px] font-medium ' + (known === total ? 'text-brand-green' : 'text-brand-muted')}>{known === total ? 'Ready' : `${known}/${total}`}</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-brand-line overflow-hidden mb-2"><div className="h-full bg-brand-green rounded-full" style={{ width: `${(known / total) * 100}%` }} /></div>
-                {cv?.fuel && <div className="text-xs text-brand-muted">Buys <span className="text-brand-ink capitalize">{cv.fuel === 'both' ? 'gas & electric' : cv.fuel}</span></div>}
-                <p className="text-[11px] text-brand-muted mt-1.5">Complete &amp; export in the <span className="text-brand-greenDark">Letters of Authority</span> section.</p>
+                {cv?.fuel && <div className="text-xs text-brand-muted mb-2.5">Buys <span className="text-brand-ink capitalize">{cv.fuel === 'both' ? 'gas & electric' : cv.fuel}</span></div>}
+                <button className="btn-primary w-full justify-center !py-1.5 text-sm mt-1" onClick={() => onOpenLoa(client.id)}>
+                  <FileSignature size={14} /> Open LOA editor
+                </button>
+                <p className="text-[11px] text-brand-muted mt-1.5">Fields auto-fill from this record; polish &amp; export the letter in the editor.</p>
               </section>
             );
           })()}
+        </div>
 
-          {/* Tracker */}
+        {/* ── Tracker + Documents & media (bottom) ── */}
+        <div className="grid lg:grid-cols-2 gap-4 items-start">
           <section className="card p-4">
             <h3 className="text-sm font-semibold mb-3">Tracker</h3>
-            <div className="space-y-1">
+            <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1">
               {MILESTONES.map((m) => {
                 const done = !!client.tracker[m.key];
                 return (
@@ -402,7 +370,6 @@ export function ClientHub({
             </div>
           </section>
 
-          {/* Media bank */}
           <section className="card p-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold">Documents &amp; media</h3>
@@ -441,7 +408,6 @@ export function ClientHub({
               {uploading ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />} Upload a document
               <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAndAnalyze(f); e.target.value = ''; }} />
             </label>
-            <p className="text-[11px] text-brand-muted mt-1.5">Bills, LOAs &amp; notes are stored here, read for client intel, and can be inserted into any report you build for them.</p>
           </section>
         </div>
       </div>

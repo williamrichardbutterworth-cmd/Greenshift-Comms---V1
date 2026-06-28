@@ -54,9 +54,9 @@ function seed(client: ClientProfile | null): ReportState {
   const cost: CostData = {
     current: {
       supplier: getField(inputs, 'currentSupplier'),
-      product: 'Out-of-contract / deemed',
-      unitRate: '',
-      standing: '',
+      product: getField(inputs, 'currentProduct') || 'Out-of-contract / deemed',
+      unitRate: getField(inputs, 'currentUnitRate'),
+      standing: getField(inputs, 'currentStanding'),
       termStatus: end ? `Expires ${dateLong(end)}` : '',
     },
     quotes: [emptyQuote(), emptyQuote(), emptyQuote()],
@@ -185,6 +185,19 @@ async function excel(state: ReportState): Promise<Blob> {
   return buildCostComparisonWorkbook(state, compute(state));
 }
 
+// Two-way bindings to the client record (the single source of truth). The 'current.*'
+// keys target the cost current-position editor; the rest are token values.
+const ci = (i: Record<string, unknown>) => i as ReturnType<typeof asInputs>;
+const boundFields = [
+  { key: 'clientName', read: (i: Record<string, unknown>) => getField(ci(i), 'companyName'), write: (v: string) => ({ companyName: v }) },
+  { key: 'annualKwh', read: (i: Record<string, unknown>) => { const n = parseNum(getField(ci(i), 'consumption')); return Number.isFinite(n) ? String(n) : ''; }, write: (v: string) => ({ consumption: v }) },
+  { key: 'contractEndDate', read: (i: Record<string, unknown>) => { const e = clientContractEnd(ci(i)); return e ? dateLong(e) : ''; }, write: (v: string) => ({ contractEnd: v }), readOnly: true },
+  { key: 'current.supplier', read: (i: Record<string, unknown>) => getField(ci(i), 'currentSupplier'), write: (v: string) => ({ currentSupplier: v }) },
+  { key: 'current.product', read: (i: Record<string, unknown>) => getField(ci(i), 'currentProduct'), write: (v: string) => ({ currentProduct: v }) },
+  { key: 'current.unitRate', read: (i: Record<string, unknown>) => getField(ci(i), 'currentUnitRate'), write: (v: string) => ({ currentUnitRate: v }) },
+  { key: 'current.standing', read: (i: Record<string, unknown>) => getField(ci(i), 'currentStanding'), write: (v: string) => ({ currentStanding: v }) },
+];
+
 export const costComparisonTemplate: ReportTemplate = {
   id: 'cost-comparison',
   kind: 'cost-comparison',
@@ -194,6 +207,7 @@ export const costComparisonTemplate: ReportTemplate = {
   html: COST_COMPARISON_HTML,
   fields: FIELDS,
   groups: GROUPS,
+  boundFields,
   seed,
   compute,
   excel,

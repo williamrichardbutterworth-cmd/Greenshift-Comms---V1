@@ -8,7 +8,7 @@ import { useWorkspace } from '../workspace/WorkspaceContext';
 // The Clients section: the CRM home (client grid + recent documents) and the
 // per-client hub. Document creation/opening is delegated to the Documents
 // workspace, so a report opens as a tab and you keep your place here.
-export function ClientsHome() {
+export function ClientsHome({ onOpenLoa }: { onOpenLoa: (clientId: string) => void }) {
   const ws = useWorkspace();
   const [projects, setProjects] = useState<ReportProjectSummary[]>([]);
   const [activeClientId, setActiveClientId] = useState<string | null>(null);
@@ -32,6 +32,7 @@ export function ClientsHome() {
           onStartDocument={(client, templateId) => ws.requestNewDoc({ profileId: client.id, templateId })}
           onDraftFromAngles={(client, angles) => ws.requestNewDoc({ profileId: client.id, templateId: 'builtin-post-call-followup', seedAngles: angles })}
           onOpenProject={(id) => ws.openDocById(id)}
+          onOpenLoa={onOpenLoa}
         />
       ) : (
         <ReportHome

@@ -159,6 +159,11 @@ function compute(state: ReportState): ComputeResult {
   return { tokens, lists: {}, summary };
 }
 
+const boundFields = [
+  { key: 'clientName', read: (i: Record<string, unknown>) => getField(i as ClientProfile['inputs'], 'companyName'), write: (v: string) => ({ companyName: v }) },
+  { key: 'contractEndDate', read: (i: Record<string, unknown>) => { const e = clientContractEnd(i as ClientProfile['inputs']); return e ? dateLong(e) : ''; }, write: (v: string) => ({ contractEnd: v }), readOnly: true },
+];
+
 export const procureAheadTemplate: ReportTemplate = {
   id: 'procure-ahead',
   kind: 'procure-ahead',
@@ -168,6 +173,7 @@ export const procureAheadTemplate: ReportTemplate = {
   html: PROCURE_AHEAD_HTML,
   fields: FIELDS,
   groups: GROUPS,
+  boundFields,
   seed,
   compute,
 };

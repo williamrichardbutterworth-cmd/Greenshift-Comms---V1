@@ -91,6 +91,18 @@ export interface ComputeResult {
   summary: ReportSummary;
 }
 
+// A two-way binding between a report field and the client record (the single source
+// of truth). On open, `read` derives the live value from the client; on edit, `write`
+// produces the client-inputs patch so the change propagates everywhere.
+export interface BoundField {
+  key: string;          // report field key; 'current.<sub>' targets the cost current-position editor
+  read: (inputs: Record<string, unknown>) => string;
+  write: (value: string) => Record<string, string>;
+  /** Derive from the client on open, but never write back (e.g. a value parsed/
+   * reformatted from a different client field, where a round-trip would distort it). */
+  readOnly?: boolean;
+}
+
 // A report template = its HTML + field manifest + seed/compute. Optional excel().
 export interface ReportTemplate {
   id: string;
@@ -101,6 +113,8 @@ export interface ReportTemplate {
   html: string;          // the full standalone HTML document, with {{tokens}}
   fields: TemplateField[];
   groups: string[];      // field-group display order
+  /** Fields that mirror the client record, kept in sync two-way by the studio. */
+  boundFields?: BoundField[];
   seed(client: ClientProfile | null): ReportState;
   compute(state: ReportState, client: ClientProfile | null): ComputeResult;
   excel?(state: ReportState, client: ClientProfile | null): Promise<Blob>;

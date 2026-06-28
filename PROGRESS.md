@@ -62,6 +62,14 @@
 
 > **⚠️ DEPLOY:** re-run `comms/web` `npm i` (new dep **exceljs**). No schema change. The `document_templates` table is now unused (safe to leave; the old builtins simply stop being served). All three phases on `main` once pushed.
 
+- **Client-view overhaul + dynamic data + LOA fixes** (web-only, gates green, browser-verified, adversarially reviewed): 
+  - **ClientHub Overview redesigned into a deal cockpit** (`ClientHub.tsx`): top band = Recommended next step + Talk-track **call points** + a sticky **"Log this call"** capture panel (paste transcript/email/bill → AI reads, files, updates the record); middle = full **client record** beside the **LOA card with "Open LOA editor →"**; bottom = milestone Tracker + Documents/media. **Activity timeline removed** from Overview (still in the Journey/own view). Full-width (`max-w-wide`; App treats `report` section as wide). LOA deep-link plumbed App→ClientsHome→ClientHub (`onOpenLoa`) → `LoaSection({initialClientId,onConsumed})`.
+  - **"Current position" in the client record** (`clientProfile.ts`): renamed Energy→**Current position** group + new `currentProduct`/`currentUnitRate`/`currentStanding` fields (on `ReportInputs`). The cost report binds to them.
+  - **Dynamic two-way binding** (single source of truth): `ReportTemplate.boundFields` (read/write/readOnly) — on report open the studio mirrors the live client into bound fields (client wins where non-empty, no data loss); editing a bound field (incl. the current-position editor, badged "synced to client record") **writes back to the client record** (debounced, freshest-client merge, only consumed keys cleared on success). `contractEndDate` is derive-only (`readOnly`) to avoid a meter-precedence round-trip.
+  - **LOA page-2 alignment fixed** (`loa.ts`): signature-block values raised ~5pt to sit on the dotted lines (measured baselines 586.8/649.9/698.7); editor matches the PDF fill.
+  - **LOA auto-refresh on entry** (`LoaSection.tsx`): the builder re-pulls the client on mount and refreshes profile-sourced fields (`deriveLoaFromClient` now refreshes `source:'profile'` fields + un-derives cleared ones; manual/CH/transcript kept); persists onto the **freshest** inputs (not the stale mount snapshot).
+  - **Adversarial review (9-agent workflow): 6 confirmed findings all fixed** — LOA persist stale-inputs rollback (HIGH); report write-back stale-client race + lost-keys-on-failure (MEDIUM×2); contract-end round-trip, LOA in-flight-edit clobber, stale-profile-not-cleared (LOW×3). Gates green (web build, comms root tsc).
+
 ---
 
 ## Next up ⬜ (user-chosen, in order)

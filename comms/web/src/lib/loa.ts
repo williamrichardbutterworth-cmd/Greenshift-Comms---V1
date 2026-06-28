@@ -52,8 +52,13 @@ export function deriveLoaFromClient(inputs: ReportInputs): LoaData {
   const saved = ((inputs as Record<string, unknown>).loa as LoaData | undefined) ?? {};
   const out: LoaData = { ...saved };
   const put = (key: string, value: string | undefined, source: LoaSource) => {
-    if (!value || !value.trim()) return;
-    if (out[key]?.value?.trim()) return; // don't clobber a saved/edited value
+    const cur = out[key];
+    // Keep values another source owns (manual edits, Companies House, conversation
+    // pulls); REFRESH anything auto-derived from the client record so newly-gathered
+    // data (uploads / transcripts) flows in automatically on re-entry — and if a
+    // record field was cleared, un-derive the stale profile value too.
+    if (!value || !value.trim()) { if (cur?.source === 'profile') delete out[key]; return; }
+    if (cur?.value?.trim() && cur.source !== 'profile') return;
     out[key] = { value: value.trim(), source };
   };
   const contact = field(inputs, 'contact');
@@ -123,11 +128,13 @@ export const LOA_FIELD_POS: Record<string, LoaFieldPos> = {
   mpan: { page: 1, x: 212, vy: 428.8, maxWidth: 250 },
   mpr: { page: 1, x: 212, vy: 460.3, maxWidth: 250 },
   siteAddresses: { page: 1, x: 212, vy: 489, maxWidth: 321, multiline: true, maxLines: 4 },
-  // page 2 — signature block (value baselines sit on the dotted lines)
-  signatoryName: { page: 2, x: 363, vy: 587, maxWidth: 175 },
-  position: { page: 2, x: 82, vy: 650, maxWidth: 200 },
-  signatoryEmail: { page: 2, x: 365, vy: 650, maxWidth: 175 },
-  dated: { page: 2, x: 85, vy: 699, maxWidth: 200 },
+  // page 2 — signature block. Values sit JUST ABOVE the printed dotted lines (so the
+  // line underlines the text) — measured label baselines are 586.8 / 649.9 / 698.7,
+  // values placed ~4-5pt higher so they read as written-on-the-line, not cut through.
+  signatoryName: { page: 2, x: 363, vy: 582, maxWidth: 175 },
+  position: { page: 2, x: 82, vy: 645, maxWidth: 200 },
+  signatoryEmail: { page: 2, x: 365, vy: 645, maxWidth: 175 },
+  dated: { page: 2, x: 85, vy: 694, maxWidth: 200 },
 };
 
 export const todayLong = (): string => new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });

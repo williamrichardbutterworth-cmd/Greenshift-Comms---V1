@@ -22,9 +22,12 @@ export const CLIENT_FIELD_GROUPS: { group: string; fields: { key: keyof ReportIn
     { key: 'email', label: 'Email', placeholder: 'jane@acme.co.uk' },
     { key: 'telephone', label: 'Telephone', placeholder: '0113 555 1212' },
   ] },
-  { group: 'Energy', fields: [
+  { group: 'Current position', fields: [
     { key: 'currentSupplier', label: 'Current supplier', placeholder: 'British Gas' },
-    { key: 'contractEnd', label: 'Earliest contract end', placeholder: 'Sep 2026' },
+    { key: 'currentProduct', label: 'Product / tariff', placeholder: 'Out-of-contract / deemed' },
+    { key: 'currentUnitRate', label: 'Unit rate (p/kWh)', placeholder: '34.50' },
+    { key: 'currentStanding', label: 'Standing charge (p/day)', placeholder: '95.00' },
+    { key: 'contractEnd', label: 'Contract end', placeholder: 'Sep 2026' },
     { key: 'consumption', label: 'Annual consumption', placeholder: '450,000 kWh' },
   ] },
 ];

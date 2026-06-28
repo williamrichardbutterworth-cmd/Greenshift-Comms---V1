@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, Download, CheckCircle2, Circle, ShieldCheck,
   FileSignature, X, RotateCcw,
@@ -13,11 +13,15 @@ import { LoaVisualEditor } from './LoaVisualEditor';
 // The Letter of Authority section: pick a client, then a visual builder that fills
 // the real LOA template (editable + draggable) from the client record /
 // conversations / Companies House, tracks known vs missing, and exports the PDF.
-export function LoaSection() {
+export function LoaSection({ initialClientId, onConsumed }: { initialClientId?: string | null; onConsumed?: () => void } = {}) {
   const [clients, setClients] = useState<ClientProfile[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const refresh = useCallback(() => api.profiles.list().then(setClients).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh]);
+  // Deep-link: open straight into a client's builder when navigated here from their hub.
+  useEffect(() => {
+    if (initialClientId) { setActiveId(initialClientId); onConsumed?.(); }
+  }, [initialClientId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const active = activeId ? clients.find((c) => c.id === activeId) ?? null : null;
   if (active) return <LoaBuilder key={active.id} client={active} onBack={() => { setActiveId(null); refresh(); }} />;
@@ -75,6 +79,32 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
   const [chOpen, setChOpen] = useState(false);
   const [chResults, setChResults] = useState<ChCompanySummary[] | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // The freshest full inputs to persist onto (so saving the LOA doesn't roll back
+  // profile data gathered since this client was last listed). Seeded from the prop,
+  // replaced by the on-entry refetch below.
+  const freshInputs = useRef<ReportInputs>(inputs);
+
+  // On entry, re-pull the client record so anything gathered since (uploads /
+  // transcripts that updated the profile) refreshes the auto-derived fields — no
+  // manual "re-read" needed. Manual / Companies House / conversation pulls are kept,
+  // including any edit in flight when the refetch lands.
+  useEffect(() => {
+    let cancelled = false;
+    api.profiles.get(client.id).then((fresh) => {
+      if (cancelled) return;
+      const fi = fresh.inputs as ReportInputs;
+      freshInputs.current = fi;
+      const d = deriveLoaFromClient(fi);
+      if (!d.dated?.value) d.dated = { value: todayLong(), source: 'manual' };
+      setLoa((cur) => {
+        const next = { ...d };
+        for (const [k, v] of Object.entries(cur)) if (v?.value?.trim() && v.source !== 'profile') next[k] = v;
+        return next;
+      });
+      setLayout(((fi as Record<string, unknown>).loaLayout as Layout | undefined) ?? {});
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [client.id]);
 
   const { known, total, missing } = useMemo(() => loaCompleteness(loa), [loa]);
 
@@ -102,9 +132,10 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
   const persist = async (nextLoa: LoaData, nextLayout: Layout) => {
     setBusy('save'); setErr(null);
     try {
-      // Preserve everything else on inputs (incl. customerVariables, which the
-      // client management owns) — only LOA data + layout are written here.
-      await api.profiles.update(client.id, { inputs: { ...inputs, loa: nextLoa, loaLayout: nextLayout } as ReportInputs });
+      // Preserve everything else on inputs (incl. customerVariables, meters, current
+      // position, which the client management owns) — only LOA data + layout are
+      // written here, onto the FRESHEST inputs so we don't roll back profile data.
+      await api.profiles.update(client.id, { inputs: { ...freshInputs.current, loa: nextLoa, loaLayout: nextLayout } as ReportInputs });
       setSaved(true); setTimeout(() => setSaved(false), 1800);
     } catch (e) { setErr(String((e as Error).message)); }
     finally { setBusy(null); }

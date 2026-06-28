@@ -79,6 +79,9 @@ export interface ReportInputs {
   contact?: string;
   sites?: string;
   currentSupplier?: string;
+  currentProduct?: string;
+  currentUnitRate?: string;
+  currentStanding?: string;
   contractEnd?: string;
   consumption?: string;
   agentNotes?: string;

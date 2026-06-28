@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FileDown, Sheet, Code2, Printer, Loader2, Sparkles, Check, ChevronDown, RefreshCw, TrendingDown, TrendingUp, Mail, Copy, X,
 } from 'lucide-react';
-import { api, type ReportProject } from '../../lib/api';
+import { api, type ReportProject, type ReportInputs, type ClientProfile } from '../../lib/api';
 import { getReportTemplate } from '../../reports/registry';
 import { renderTemplate, annualCost, parseNum, money0 } from '../../reports/engine';
 import { stateFromProject, patchFromState } from '../../reports/state';
 import { loadProcureData } from '../../reports/templates/procureAhead';
-import type { ReportState, CostData, CurrentPosition, TemplateField, ProcureData } from '../../reports/types';
+import type { ReportState, CostData, CurrentPosition, TemplateField, ProcureData, ReportTemplate } from '../../reports/types';
 import { exportIframePdf, printIframe, downloadHtml, download, slug } from '../../reports/export';
 import { QuotesGrid } from './QuotesGrid';
 
@@ -24,6 +24,11 @@ export function ReportStudio({ project, onProjectSaved }: {
   const [exportOpen, setExportOpen] = useState(false);
   const [email, setEmail] = useState<null | { loading?: boolean; subject?: string; body?: string; error?: string; logged?: boolean }>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  // Two-way binding to the client record (single source of truth).
+  const [client, setClient] = useState<ClientProfile | null>(null);
+  const clientRef = useRef<ClientProfile | null>(null); // freshest client for write-back merges
+  useEffect(() => { clientRef.current = client; }, [client]);
+  const pendingClient = useRef<Record<string, string>>({});
 
   // ── derived ──
   const cost: CostData = state.data.cost ?? { current: { ...EMPTY_CURRENT }, quotes: [] };
@@ -39,7 +44,7 @@ export function ReportStudio({ project, onProjectSaved }: {
   const [preview, setPreview] = useState(html);
   useEffect(() => { const t = setTimeout(() => setPreview(html), 200); return () => clearTimeout(t); }, [html]);
 
-  // ── autosave ──
+  // ── autosave (+ flush two-way client-record writes) ──
   const dirty = useRef(false);
   useEffect(() => {
     if (!dirty.current) return;
@@ -51,15 +56,49 @@ export function ReportStudio({ project, onProjectSaved }: {
         setSaveState('saved');
         setTimeout(() => setSaveState('idle'), 1400);
       } catch { setSaveState('idle'); }
+      // Flush queued client-record write-backs against the FRESHEST client. Only the
+      // keys we successfully write are cleared, so edits made during the await (or a
+      // failed write) survive for the next flush — no silent divergence.
+      const patch = { ...pendingClient.current };
+      if (state.clientProfileId && Object.keys(patch).length) {
+        try {
+          const cur = clientRef.current ?? await api.profiles.get(state.clientProfileId);
+          const updated = await api.profiles.update(state.clientProfileId, { inputs: { ...cur.inputs, ...patch } as ReportInputs });
+          for (const k of Object.keys(patch)) if (pendingClient.current[k] === patch[k]) delete pendingClient.current[k];
+          clientRef.current = updated; setClient(updated);
+        } catch { /* keep pending keys; a later edit/save retries them */ }
+      }
     }, 800);
     return () => clearTimeout(t);
   }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // On open, mirror the live client record into the bound fields (client wins where it
+  // has a value, so reports reflect the latest data without wiping report-only edits).
+  useEffect(() => {
+    if (!state.clientProfileId || !template) return;
+    let cancelled = false;
+    api.profiles.get(state.clientProfileId).then((c) => {
+      if (cancelled) return;
+      clientRef.current = c; setClient(c);
+      // Only mark dirty if the live record actually changed a bound field — so just
+      // opening a report doesn't bump its timestamp / reorder the recent list.
+      setState((s) => { const next = applyBound(s, template, c.inputs as Record<string, unknown>); if (next !== s) dirty.current = true; return next; });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [state.clientProfileId, template?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const mutate = useCallback((fn: (s: ReportState) => ReportState) => { dirty.current = true; setState(fn); }, []);
-  const setValue = (k: string, v: string) => mutate((s) => ({ ...s, values: { ...s.values, [k]: v } }));
+  // Queue a write-back to the client record when a bound field is edited.
+  const queueBound = (key: string, v: string) => {
+    const bf = template?.boundFields?.find((b) => b.key === key);
+    if (bf && !bf.readOnly) Object.assign(pendingClient.current, bf.write(v));
+  };
+  const setValue = (k: string, v: string) => { queueBound(k, v); mutate((s) => ({ ...s, values: { ...s.values, [k]: v } })); };
   const setTitle = (v: string) => mutate((s) => ({ ...s, title: v }));
-  const setCurrent = (patch: Partial<CurrentPosition>) =>
+  const setCurrent = (patch: Partial<CurrentPosition>) => {
+    Object.entries(patch).forEach(([sub, val]) => queueBound(`current.${sub}`, val as string));
     mutate((s) => ({ ...s, data: { ...s.data, cost: { current: { ...EMPTY_CURRENT, ...s.data.cost?.current, ...patch }, quotes: s.data.cost?.quotes ?? [] } } }));
+  };
   const setQuotes = (quotes: CostData['quotes']) =>
     mutate((s) => ({ ...s, data: { ...s.data, cost: { current: s.data.cost?.current ?? { ...EMPTY_CURRENT }, quotes } } }));
   const setProcure = (procure: ProcureData) => mutate((s) => ({ ...s, data: { ...s.data, procure } }));
@@ -186,7 +225,10 @@ export function ReportStudio({ project, onProjectSaved }: {
         {template.kind === 'cost-comparison' && (
           <>
             <section className="card p-4">
-              <h3 className="label mb-2.5">Your current position</h3>
+              <div className="flex items-center justify-between mb-2.5">
+                <h3 className="label">Your current position</h3>
+                <span className="text-[9px] uppercase tracking-wide text-brand-greenDark/70 bg-brand-tint px-1 rounded">synced to client record</span>
+              </div>
               <div className="grid grid-cols-2 gap-2.5">
                 <Inline label="Supplier" value={cost.current.supplier} onChange={(v) => setCurrent({ supplier: v })} placeholder="British Gas" />
                 <Inline label="Product" value={cost.current.product} onChange={(v) => setCurrent({ product: v })} placeholder="Out-of-contract / deemed" />
@@ -283,6 +325,30 @@ function CoveringEmailModal({ email, onChange, onClose, onLog, canLog }: {
 
 function blankState(project: ReportProject): ReportState {
   return { templateId: '', clientProfileId: undefined, title: project.name || 'Report', values: {}, data: {} };
+}
+
+// Mirror the live client record into the bound fields. A non-empty client value wins
+// (so the report reflects the latest data); an empty client value leaves the report's
+// own value untouched (no data loss when the client record hasn't been filled yet).
+function applyBound(s: ReportState, template: ReportTemplate, inputs: Record<string, unknown>): ReportState {
+  let values = s.values;
+  let cost = s.data.cost;
+  let changed = false;
+  for (const b of template.boundFields ?? []) {
+    const live = b.read(inputs);
+    if (!live || !live.trim()) continue;
+    if (b.key.startsWith('current.')) {
+      const sub = b.key.slice('current.'.length) as keyof CurrentPosition;
+      if ((cost?.current?.[sub] ?? '') === live) continue;
+      cost = { current: { ...EMPTY_CURRENT, ...(cost?.current ?? {}), [sub]: live }, quotes: cost?.quotes ?? [] };
+      changed = true;
+    } else {
+      if ((values[b.key] ?? '') === live) continue;
+      values = { ...values, [b.key]: live };
+      changed = true;
+    }
+  }
+  return changed ? { ...s, values, data: { ...s.data, cost } } : s;
 }
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
