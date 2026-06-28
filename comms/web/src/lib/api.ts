@@ -206,7 +206,7 @@ export interface ContextItem {
 }
 
 // ── Saved, versioned report projects ──
-export interface ReportProjectSummary { id: string; name: string; createdAt: string; updatedAt: string; }
+export interface ReportProjectSummary { id: string; name: string; createdAt: string; updatedAt: string; templateId?: string; }
 export interface ReportVersion { at: string; label: string; doc: ReportDoc; inputs: ReportInputs; }
 export interface ReportProject extends ReportProjectSummary {
   inputs: ReportInputs;

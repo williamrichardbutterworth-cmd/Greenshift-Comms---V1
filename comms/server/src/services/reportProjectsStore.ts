@@ -36,6 +36,8 @@ export interface ReportProjectSummary {
   name: string;
   createdAt: string;
   updatedAt: string;
+  /** Which report-engine template this project uses (absent for legacy projects). */
+  templateId?: string;
 }
 
 export interface NewProject {
@@ -79,8 +81,12 @@ const rowToProject = (r: Row): ReportProject => ({
   id: r.id, name: r.name, inputs: r.inputs ?? {}, doc: r.doc ?? EMPTY_DOC,
   context: r.context ?? [], versions: r.versions ?? [], createdAt: r.created_at, updatedAt: r.updated_at,
 });
-const rowToSummary = (r: Pick<Row, 'id' | 'name' | 'created_at' | 'updated_at'>): ReportProjectSummary => ({
-  id: r.id, name: r.name, createdAt: r.created_at, updatedAt: r.updated_at,
+const templateIdOf = (inputs: Record<string, unknown> | undefined): string | undefined => {
+  const t = (inputs ?? {})['templateId'];
+  return typeof t === 'string' ? t : undefined;
+};
+const rowToSummary = (r: Pick<Row, 'id' | 'name' | 'inputs' | 'created_at' | 'updated_at'>): ReportProjectSummary => ({
+  id: r.id, name: r.name, createdAt: r.created_at, updatedAt: r.updated_at, templateId: templateIdOf(r.inputs),
 });
 
 // ───────────────────────── File backing (local fallback) ─────────────────────────
@@ -126,13 +132,13 @@ export async function listProjects(): Promise<ReportProjectSummary[]> {
   if (sb) {
     const { data, error } = await sb
       .from('report_projects')
-      .select('id, name, created_at, updated_at')
+      .select('id, name, inputs, created_at, updated_at')
       .order('updated_at', { ascending: false });
     if (error) throw new Error(error.message);
     return (data as Row[]).map(rowToSummary);
   }
   return (await fileLoad()).slice().sort(byUpdatedDesc).map((p) => ({
-    id: p.id, name: p.name, createdAt: p.createdAt, updatedAt: p.updatedAt,
+    id: p.id, name: p.name, createdAt: p.createdAt, updatedAt: p.updatedAt, templateId: templateIdOf(p.inputs),
   }));
 }
 

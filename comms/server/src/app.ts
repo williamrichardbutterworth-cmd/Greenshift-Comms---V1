@@ -5,7 +5,6 @@ import { marketRoutes } from './routes/market';
 import { reviewRoutes } from './routes/review';
 import { newsRoutes } from './routes/news';
 import { reportRoutes } from './routes/report';
-import { templateRoutes } from './routes/templates';
 import { reportProjectRoutes } from './routes/reportProjects';
 import { clientProfileRoutes } from './routes/clientProfiles';
 import { fileRoutes } from './routes/files';
@@ -43,7 +42,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(reviewRoutes);
   await app.register(newsRoutes);
   await app.register(reportRoutes);
-  await app.register(templateRoutes);
   await app.register(reportProjectRoutes);
   await app.register(clientProfileRoutes);
   await app.register(fileRoutes);

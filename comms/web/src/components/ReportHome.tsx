@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { api, type ReportProjectSummary, type ClientProfile } from '../lib/api';
 import { stageLabel } from '../lib/crm';
+import { getReportTemplate } from '../reports/registry';
 
 function ago(iso: string): string {
   const t = iso ? new Date(iso).getTime() : NaN;
@@ -43,19 +44,24 @@ export function ReportHome({
     () => profiles.filter((p) => !q || (p.name ?? '').toLowerCase().includes(q) || (p.inputs?.currentSupplier ?? '').toLowerCase().includes(q)),
     [profiles, q],
   );
+  // Only show engine reports — legacy projects (from the old editor) can't be opened.
   const recentDocs = useMemo(
-    () => [...projects].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)).filter((p) => !q || (p.name ?? '').toLowerCase().includes(q)).slice(0, 8),
+    () => [...projects]
+      .filter((p) => getReportTemplate(p.templateId))
+      .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt))
+      .filter((p) => !q || (p.name ?? '').toLowerCase().includes(q))
+      .slice(0, 8),
     [projects, q],
   );
 
   const renameProject = async (p: ReportProjectSummary) => {
-    const name = window.prompt('Document name', p.name);
+    const name = window.prompt('Report name', p.name);
     if (!name || name === p.name) return;
     try { await api.projects.update(p.id, { name }); onRefresh(); }
     catch (e) { setErr(String((e as Error).message)); }
   };
   const deleteProject = async (id: string) => {
-    if (!window.confirm('Delete this document? This cannot be undone.')) return;
+    if (!window.confirm('Delete this report? This cannot be undone.')) return;
     try { await api.projects.remove(id); onRefresh(); }
     catch (e) { setErr(String((e as Error).message)); }
   };
@@ -88,7 +94,7 @@ export function ReportHome({
             <button className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-muted hover:text-brand-ink" onClick={() => setQuery('')} title="Clear search"><X size={13} /></button>
           )}
         </div>
-        <button className="btn-ghost" onClick={onNew}><FilePlus2 size={16} /> New document</button>
+        <button className="btn-ghost" onClick={onNew}><FilePlus2 size={16} /> New report</button>
         <button className="btn-primary" onClick={onNewClient}><UserPlus size={16} /> New client</button>
       </div>
 
@@ -152,7 +158,7 @@ export function ReportHome({
       {recentDocs.length > 0 && (
         <section>
           <div className="flex items-center gap-2 mb-2">
-            <div className="label">Recent documents</div>
+            <div className="label">Recent reports</div>
             <span className="text-[11px] text-brand-muted">— or open a client above to see all of theirs</span>
           </div>
           <div className="card divide-y divide-brand-line">
@@ -161,7 +167,7 @@ export function ReportHome({
                 <span className="grid place-items-center h-8 w-8 rounded-lg bg-brand-tint text-brand-greenDark shrink-0"><FileText size={15} /></span>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium truncate" title={p.name}>{p.name}</div>
-                  <div className="text-[11px] text-brand-muted">Edited {ago(p.updatedAt)}</div>
+                  <div className="text-[11px] text-brand-muted">{getReportTemplate(p.templateId)?.name ?? 'Report'} · edited {ago(p.updatedAt)}</div>
                 </div>
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                   <button className="p-1 text-brand-muted hover:text-brand-ink" onClick={(e) => { e.stopPropagation(); renameProject(p); }} title="Rename"><Pencil size={13} /></button>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  FileDown, Sheet, Code2, Printer, Loader2, Sparkles, Check, ChevronDown, RefreshCw, TrendingDown, TrendingUp,
+  FileDown, Sheet, Code2, Printer, Loader2, Sparkles, Check, ChevronDown, RefreshCw, TrendingDown, TrendingUp, Mail, Copy, X,
 } from 'lucide-react';
 import { api, type ReportProject } from '../../lib/api';
 import { getReportTemplate } from '../../reports/registry';
@@ -22,6 +22,7 @@ export function ReportStudio({ project, onProjectSaved }: {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [busy, setBusy] = useState<null | 'pdf' | 'xlsx' | 'ai' | 'market'>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [email, setEmail] = useState<null | { loading?: boolean; subject?: string; body?: string; error?: string; logged?: boolean }>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   // ── derived ──
@@ -107,6 +108,26 @@ export function ReportStudio({ project, onProjectSaved }: {
     if (state.clientProfileId) api.profiles.addActivity(state.clientProfileId, { type: 'document', title: `${title} — ${state.title}` }).catch(() => {});
   };
 
+  // Hand the report off to the email assistant: draft a covering email seeded with
+  // the report's headline facts, grounded in the client record.
+  const draftCoveringEmail = async () => {
+    setExportOpen(false);
+    if (!state.clientProfileId) { setEmail({ error: 'Attach this report to a client to draft a covering email.' }); return; }
+    setEmail({ loading: true });
+    try {
+      const client = await api.profiles.get(state.clientProfileId);
+      const sum = computed?.summary;
+      const facts = (sum?.facts ?? []).map((f) => `${f.label}: ${f.value}`).join('; ');
+      const instruction = `I have prepared a ${template.name} ("${state.title}") to send to this client. Headline: ${sum?.headline ?? ''}. Key figures: ${facts}. Write a short, warm covering email that introduces the report I'm attaching, states the headline outcome plainly, and proposes a brief call to walk through it.`;
+      const res = await api.email.draft({ inputs: client.inputs, history: [], mode: 'follow-up', instruction, angles: [] });
+      setEmail({ subject: res.subject, body: res.body, error: res.error });
+    } catch (e) { setEmail({ error: String((e as Error).message) }); }
+  };
+  const logEmailToClient = async () => {
+    if (!state.clientProfileId || !email?.body) return;
+    try { await api.profiles.addActivity(state.clientProfileId, { type: 'email-sent', title: email.subject || 'Covering email', detail: email.body }); setEmail((e) => (e ? { ...e, logged: true } : e)); } catch { /* no-op */ }
+  };
+
   const aiDraft = async () => {
     setBusy('ai');
     try {
@@ -148,7 +169,8 @@ export function ReportStudio({ project, onProjectSaved }: {
             <div className="relative">
               <button className="btn-ghost !py-1.5 !px-2" onClick={() => setExportOpen((o) => !o)} title="More export options"><ChevronDown size={15} /></button>
               {exportOpen && (
-                <div className="absolute right-0 mt-1 z-20 card p-1 w-40 shadow-lg">
+                <div className="absolute right-0 mt-1 z-20 card p-1 w-48 shadow-lg">
+                  <button className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint inline-flex items-center gap-2" onClick={draftCoveringEmail}><Mail size={14} /> Draft covering email</button>
                   <button className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint inline-flex items-center gap-2" onClick={doPrint}><Printer size={14} /> Print / Save PDF</button>
                   <button className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint inline-flex items-center gap-2" onClick={exportHtml}><Code2 size={14} /> Download HTML</button>
                 </div>
@@ -215,6 +237,45 @@ export function ReportStudio({ project, onProjectSaved }: {
         <div className="rounded-lg overflow-hidden ring-1 ring-brand-line shadow-soft bg-[#eceae6]">
           <iframe ref={iframeRef} srcDoc={preview} title="Report preview" className="w-full h-[calc(100vh-var(--topbar-h)-56px)] min-h-[600px] border-0 bg-[#eceae6]" />
         </div>
+      </div>
+
+      {email && <CoveringEmailModal email={email} onChange={setEmail} onClose={() => setEmail(null)} onLog={logEmailToClient} canLog={!!state.clientProfileId} />}
+    </div>
+  );
+}
+
+function CoveringEmailModal({ email, onChange, onClose, onLog, canLog }: {
+  email: { loading?: boolean; subject?: string; body?: string; error?: string; logged?: boolean };
+  onChange: (e: { loading?: boolean; subject?: string; body?: string; error?: string; logged?: boolean }) => void;
+  onClose: () => void;
+  onLog: () => void;
+  canLog: boolean;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => { navigator.clipboard?.writeText(`Subject: ${email.subject ?? ''}\n\n${email.body ?? ''}`).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {}); };
+  return (
+    <div className="fixed inset-0 z-40 bg-brand-ink/40 grid place-items-center p-4" onClick={onClose}>
+      <div className="card w-full max-w-lg p-5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-semibold flex items-center gap-2"><Mail size={17} className="text-brand-greenDark" /> Covering email</h3>
+          <button className="btn-ghost !px-1.5 !py-1" onClick={onClose}><X size={16} /></button>
+        </div>
+        {email.loading ? (
+          <p className="text-sm text-brand-muted inline-flex items-center gap-2 py-6"><Loader2 size={15} className="animate-spin" /> Drafting from the report &amp; client…</p>
+        ) : email.error ? (
+          <p className="text-sm text-up py-4">{email.error}</p>
+        ) : (
+          <>
+            <label className="text-[11px] text-brand-muted block mb-0.5">Subject</label>
+            <input className="input !py-1.5 text-sm mb-3" value={email.subject ?? ''} onChange={(e) => onChange({ ...email, subject: e.target.value })} />
+            <label className="text-[11px] text-brand-muted block mb-0.5">Body</label>
+            <textarea className="input !py-1.5 text-sm h-56 resize-none" value={email.body ?? ''} onChange={(e) => onChange({ ...email, body: e.target.value })} />
+            <div className="flex items-center gap-2 mt-3">
+              <button className="btn-ghost !py-1.5" onClick={copy}>{copied ? <Check size={15} className="text-brand-green" /> : <Copy size={15} />} {copied ? 'Copied' : 'Copy'}</button>
+              {canLog && <button className="btn-primary !py-1.5 ml-auto" onClick={onLog} disabled={email.logged}>{email.logged ? <><Check size={15} /> Logged</> : 'Log to client timeline'}</button>}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
