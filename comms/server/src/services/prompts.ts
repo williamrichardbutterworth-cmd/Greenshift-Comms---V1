@@ -511,6 +511,37 @@ Rules: Use ONLY the details and conversation provided — never invent prices, f
   };
 }
 
+// ── Report engine: AI narrative for a generated report ──
+export interface NarrativeFact { label: string; value: string }
+
+export function reportFillPrompt(
+  kind: string,
+  inputs: ReportInputs,
+  facts: NarrativeFact[],
+  _values: Record<string, string>,
+) {
+  const factLines = facts.map((f) => `- ${f.label}: ${f.value}`).join('\n');
+  return {
+    system: HOUSE_RULES,
+    prompt: `Draft the narrative prose for a Green Shift Energy ${kind === 'cost-comparison' ? 'Cost Comparison report' : 'report'} for a UK business energy customer. The figures below are ALREADY computed and FINAL — refer to them, never change or invent numbers.
+
+Client:
+${JSON.stringify(inputs, null, 2)}
+
+Key figures (already worked out — be consistent with these, do not alter):
+${factLines || '(none yet)'}
+
+Return ONLY JSON in exactly this shape:
+{
+  "summaryCurrent": "2 sentences on the client's current position and why acting matters (e.g. rolling onto out-of-contract deemed rates when the term ends).",
+  "summaryRecommended": "2 sentences on what we found across the supplier panel and the strongest option, consistent with the figures.",
+  "recommendationTitle": "a short imperative headline naming the recommended supplier and term.",
+  "recommendationRationale": "2-3 sentences on why this option — budget certainty, removing price risk, lowest all-in cost of the panel."
+}
+Rules: Use ONLY the details and figures provided — never invent a price, supplier, figure or date. Concise, warm, professional UK English. This is general commentary, not a personal recommendation to trade or a guaranteed quotation. No markdown, no placeholders.`,
+  };
+}
+
 // ── Comprehensive client intake — one structured profile from all sources ──
 export interface ClientMeter {
   type: 'electric' | 'gas';

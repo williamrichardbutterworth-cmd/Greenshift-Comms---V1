@@ -1,9 +1,9 @@
 import { FilePlus2, X, FileText, Plus } from 'lucide-react';
 import { useWorkspace } from '../workspace/WorkspaceContext';
-import { DocumentStudio } from './DocumentStudio';
+import { ReportStudio } from './reports/ReportStudio';
 
-// The Documents workspace: a strip of open-document tabs over the active studio.
-// Open documents persist in the workspace store, so you can leave for other
+// The Documents workspace: a strip of open-report tabs over the active studio.
+// Open reports persist in the workspace store, so you can leave for other
 // sections and come back to them intact.
 export function DocumentsSection() {
   const ws = useWorkspace();
@@ -44,15 +44,15 @@ export function DocumentsSection() {
       )}
 
       {active ? (
-        <DocumentStudio key={active.id} project={active.project} onProjectSaved={ws.updateProject} />
+        <ReportStudio key={active.id} project={active.project} onProjectSaved={ws.updateProject} />
       ) : (
         <div className="card p-12 text-center max-w-xl mx-auto mt-6">
           <div className="grid place-items-center h-12 w-12 rounded-xl bg-brand-tint text-brand-greenDark mx-auto mb-3"><FileText size={22} /></div>
-          <h2 className="text-lg font-semibold">No documents open</h2>
+          <h2 className="text-lg font-semibold">No reports open</h2>
           <p className="text-sm text-brand-muted mt-1.5 mb-4">
-            Open a report from a client, or start a new one. Open documents stay here as tabs while you work elsewhere in the app.
+            Open a report from a client, or start a new one. Open reports stay here as tabs while you work elsewhere in the app.
           </p>
-          <button className="btn-primary mx-auto" onClick={() => ws.requestNewDoc({})}><FilePlus2 size={16} /> New document</button>
+          <button className="btn-primary mx-auto" onClick={() => ws.requestNewDoc({})}><FilePlus2 size={16} /> New report</button>
         </div>
       )}
     </div>

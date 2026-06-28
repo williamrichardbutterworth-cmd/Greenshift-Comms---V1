@@ -1,0 +1,230 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  FileDown, Sheet, Code2, Printer, Loader2, Sparkles, Check, ChevronDown,
+} from 'lucide-react';
+import { api, type ReportProject } from '../../lib/api';
+import { getReportTemplate } from '../../reports/registry';
+import { renderTemplate, annualCost, parseNum, money0 } from '../../reports/engine';
+import { stateFromProject, patchFromState } from '../../reports/state';
+import type { ReportState, CostData, CurrentPosition, TemplateField } from '../../reports/types';
+import { exportIframePdf, printIframe, downloadHtml, download, slug } from '../../reports/export';
+import { QuotesGrid } from './QuotesGrid';
+
+const EMPTY_CURRENT: CurrentPosition = { supplier: '', product: '', unitRate: '', standing: '', termStatus: '' };
+
+export function ReportStudio({ project, onProjectSaved }: {
+  project: ReportProject;
+  onProjectSaved: (p: ReportProject) => void;
+}) {
+  const [state, setState] = useState<ReportState>(() => stateFromProject(project) ?? blankState(project));
+  const template = getReportTemplate(state.templateId);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [busy, setBusy] = useState<null | 'pdf' | 'xlsx' | 'ai'>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // ── derived ──
+  const cost: CostData = state.data.cost ?? { current: { ...EMPTY_CURRENT }, quotes: [] };
+  const kwh = parseNum(state.values.annualKwh);
+  const currentCost = annualCost(parseNum(cost.current.unitRate), parseNum(cost.current.standing), kwh);
+  const computed = useMemo(() => template?.compute(state, null) ?? null, [template, state]);
+  const html = useMemo(
+    () => (template && computed ? renderTemplate(template.html, computed.tokens, computed.lists) : ''),
+    [template, computed],
+  );
+
+  // Debounced preview so the iframe doesn't reload on every keystroke.
+  const [preview, setPreview] = useState(html);
+  useEffect(() => { const t = setTimeout(() => setPreview(html), 200); return () => clearTimeout(t); }, [html]);
+
+  // ── autosave ──
+  const dirty = useRef(false);
+  useEffect(() => {
+    if (!dirty.current) return;
+    setSaveState('saving');
+    const t = setTimeout(async () => {
+      try {
+        const saved = await api.projects.update(project.id, patchFromState(state));
+        onProjectSaved(saved);
+        setSaveState('saved');
+        setTimeout(() => setSaveState('idle'), 1400);
+      } catch { setSaveState('idle'); }
+    }, 800);
+    return () => clearTimeout(t);
+  }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const mutate = useCallback((fn: (s: ReportState) => ReportState) => { dirty.current = true; setState(fn); }, []);
+  const setValue = (k: string, v: string) => mutate((s) => ({ ...s, values: { ...s.values, [k]: v } }));
+  const setTitle = (v: string) => mutate((s) => ({ ...s, title: v }));
+  const setCurrent = (patch: Partial<CurrentPosition>) =>
+    mutate((s) => ({ ...s, data: { ...s.data, cost: { current: { ...EMPTY_CURRENT, ...s.data.cost?.current, ...patch }, quotes: s.data.cost?.quotes ?? [] } } }));
+  const setQuotes = (quotes: CostData['quotes']) =>
+    mutate((s) => ({ ...s, data: { ...s.data, cost: { current: s.data.cost?.current ?? { ...EMPTY_CURRENT }, quotes } } }));
+
+  if (!template) {
+    return <div className="card p-10 text-center text-brand-muted">This report’s template isn’t available. It may have been renamed or removed.</div>;
+  }
+  const fieldsFor = (group: string) => template.fields.filter((f) => f.group === group);
+
+  const fileBase = slug(state.title);
+  const flushPreview = async () => { setPreview(html); await new Promise((r) => setTimeout(r, 260)); };
+
+  const exportPdf = async () => {
+    setExportOpen(false); setBusy('pdf');
+    try {
+      await flushPreview();
+      if (iframeRef.current) await exportIframePdf(iframeRef.current, `${fileBase}.pdf`);
+      logDoc('Generated PDF report');
+    } catch { /* surfaced by the disabled state lifting */ } finally { setBusy(null); }
+  };
+  const exportXlsx = async () => {
+    setExportOpen(false); setBusy('xlsx');
+    try {
+      if (template.excel) { const blob = await template.excel(state, null); download(blob, `${fileBase}.xlsx`); logDoc('Generated Excel comparison'); }
+    } catch { /* no-op */ } finally { setBusy(null); }
+  };
+  const exportHtml = () => { setExportOpen(false); downloadHtml(html, `${fileBase}.html`); };
+  const doPrint = async () => { setExportOpen(false); await flushPreview(); if (iframeRef.current) printIframe(iframeRef.current); };
+
+  const logDoc = (title: string) => {
+    if (state.clientProfileId) api.profiles.addActivity(state.clientProfileId, { type: 'document', title: `${title} — ${state.title}` }).catch(() => {});
+  };
+
+  const aiDraft = async () => {
+    setBusy('ai');
+    try {
+      const res = await api.reports.draftNarrative({
+        kind: template.kind,
+        clientProfileId: state.clientProfileId,
+        facts: computed?.summary.facts ?? [],
+        values: state.values,
+      });
+      if (res.values && Object.keys(res.values).length) {
+        mutate((s) => ({ ...s, values: { ...s.values, ...res.values } }));
+      }
+    } catch { /* degrade silently — fields stay as they are */ } finally { setBusy(null); }
+  };
+
+  return (
+    <div className="grid xl:grid-cols-[minmax(400px,500px)_1fr] gap-5 items-start">
+      {/* ── Data panel ── */}
+      <div className="space-y-4 xl:max-h-[calc(100vh-var(--topbar-h)-40px)] xl:overflow-y-auto xl:pr-1 pb-4">
+        <section className="card p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <span className={'text-[10px] uppercase tracking-wide font-medium px-1.5 py-0.5 rounded bg-brand-tint ' + template.accent}>{template.name}</span>
+            <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-brand-muted">
+              {saveState === 'saving' ? <><Loader2 size={11} className="animate-spin" /> Saving…</> : saveState === 'saved' ? <><Check size={11} className="text-brand-green" /> Saved</> : 'Autosaves'}
+            </span>
+          </div>
+          <input value={state.title} onChange={(e) => setTitle(e.target.value)} className="input !py-1.5 font-semibold" placeholder="Report title" />
+
+          {/* export bar */}
+          <div className="flex items-center gap-2 mt-3">
+            <button className="btn-primary !py-1.5 flex-1" onClick={exportPdf} disabled={!!busy}>
+              {busy === 'pdf' ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />} PDF
+            </button>
+            <button className="btn-ghost !py-1.5" onClick={exportXlsx} disabled={!!busy} title="Download the matching Excel comparison">
+              {busy === 'xlsx' ? <Loader2 size={15} className="animate-spin" /> : <Sheet size={15} />} Excel
+            </button>
+            <div className="relative">
+              <button className="btn-ghost !py-1.5 !px-2" onClick={() => setExportOpen((o) => !o)} title="More export options"><ChevronDown size={15} /></button>
+              {exportOpen && (
+                <div className="absolute right-0 mt-1 z-20 card p-1 w-40 shadow-lg">
+                  <button className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint inline-flex items-center gap-2" onClick={doPrint}><Printer size={14} /> Print / Save PDF</button>
+                  <button className="w-full text-left text-sm px-2 py-1.5 rounded hover:bg-brand-tint inline-flex items-center gap-2" onClick={exportHtml}><Code2 size={14} /> Download HTML</button>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <Group title="Report details">{fieldsFor('Report').map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</Group>
+
+        <Group title="Client">{fieldsFor('Client').map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</Group>
+
+        {template.kind === 'cost-comparison' && (
+          <>
+            <section className="card p-4">
+              <h3 className="label mb-2.5">Your current position</h3>
+              <div className="grid grid-cols-2 gap-2.5">
+                <Inline label="Supplier" value={cost.current.supplier} onChange={(v) => setCurrent({ supplier: v })} placeholder="British Gas" />
+                <Inline label="Product" value={cost.current.product} onChange={(v) => setCurrent({ product: v })} placeholder="Out-of-contract / deemed" />
+                <Inline label="Unit rate (p/kWh)" value={cost.current.unitRate} onChange={(v) => setCurrent({ unitRate: v })} placeholder="34.50" mono />
+                <Inline label="Standing (p/day)" value={cost.current.standing} onChange={(v) => setCurrent({ standing: v })} placeholder="95.00" mono />
+                <Inline label="Contract status" value={cost.current.termStatus} onChange={(v) => setCurrent({ termStatus: v })} placeholder="Expires 31 Aug" />
+                <div>
+                  <label className="text-[11px] text-brand-muted block mb-0.5">Annual cost</label>
+                  <div className="input !py-1.5 text-sm font-mono bg-brand-tint/40">{Number.isFinite(currentCost) ? `£${money0(currentCost)}` : '—'}</div>
+                </div>
+              </div>
+            </section>
+
+            <section className="card p-4">
+              <h3 className="label mb-2.5">Supplier quotes</h3>
+              <QuotesGrid quotes={cost.quotes} annualKwh={kwh} currentCost={currentCost} onChange={setQuotes} />
+            </section>
+          </>
+        )}
+
+        <section className="card p-4">
+          <div className="flex items-center justify-between mb-2.5">
+            <h3 className="label">Narrative &amp; recommendation</h3>
+            <button className="btn-ghost !py-1 !px-2 text-xs" onClick={aiDraft} disabled={!!busy} title="Draft the narrative from this client + the figures">
+              {busy === 'ai' ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} AI draft
+            </button>
+          </div>
+          <div className="space-y-2.5">{fieldsFor('Recommendation').map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</div>
+        </section>
+
+        <Group title="Footer">{fieldsFor('Footer').map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</Group>
+      </div>
+
+      {/* ── Live preview ── */}
+      <div className="xl:sticky xl:top-[calc(var(--topbar-h)+16px)]">
+        <div className="rounded-lg overflow-hidden ring-1 ring-brand-line shadow-soft bg-[#eceae6]">
+          <iframe ref={iframeRef} srcDoc={preview} title="Report preview" className="w-full h-[calc(100vh-var(--topbar-h)-56px)] min-h-[600px] border-0 bg-[#eceae6]" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function blankState(project: ReportProject): ReportState {
+  return { templateId: '', clientProfileId: undefined, title: project.name || 'Report', values: {}, data: {} };
+}
+
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="card p-4">
+      <h3 className="label mb-2.5">{title}</h3>
+      <div className="grid sm:grid-cols-2 gap-2.5">{children}</div>
+    </section>
+  );
+}
+
+function Field({ f, value, onChange }: { f: TemplateField; value: string; onChange: (v: string) => void }) {
+  const wrap = f.full || f.type === 'multiline' ? 'sm:col-span-2' : '';
+  return (
+    <div className={wrap}>
+      <label className="text-[11px] text-brand-muted block mb-0.5 flex items-center gap-1.5">
+        {f.label}
+        {f.bound && <span className="text-[9px] uppercase tracking-wide text-brand-greenDark/70 bg-brand-tint px-1 rounded">from client</span>}
+      </label>
+      {f.type === 'multiline' ? (
+        <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={3} placeholder={f.placeholder} spellCheck className="input !py-1.5 text-sm resize-y" />
+      ) : (
+        <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={f.placeholder} className="input !py-1.5 text-sm" />
+      )}
+      {f.help && <p className="text-[10px] text-brand-muted/80 mt-0.5">{f.help}</p>}
+    </div>
+  );
+}
+
+function Inline({ label, value, onChange, placeholder, mono }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean }) {
+  return (
+    <div>
+      <label className="text-[11px] text-brand-muted block mb-0.5">{label}</label>
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className={'input !py-1.5 text-sm ' + (mono ? 'font-mono' : '')} />
+    </div>
+  );
+}

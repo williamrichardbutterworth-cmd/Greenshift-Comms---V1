@@ -237,6 +237,16 @@ export interface AssembleContextPayload {
 export interface AssembleResult { sections: SectionSpec[]; snapshot: MarketSnapshot; provider: string; note?: string; }
 
 export type EditAction = 'concise' | 'expand' | 'addData' | 'rewrite' | 'regenerate' | 'analyseChart';
+
+// ── Report engine: AI narrative drafting ──
+export interface NarrativeFact { label: string; value: string }
+export interface DraftNarrativePayload {
+  kind: string;
+  clientProfileId?: string;
+  facts: NarrativeFact[];
+  values: Record<string, string>;
+}
+export interface DraftNarrativeResult { values: Record<string, string>; provider: string; error?: string; }
 export interface EditResult { text: string; provider: string; error?: string; }
 
 // ── Client records (CRM) ──
@@ -423,17 +433,13 @@ export const api = {
     add: (input: ArticleInput & { priority?: number }) => j<Headline>('/api/news/headlines', postJson(input)),
     remove: (id: string) => j<{ ok: boolean }>(`/api/news/headlines/${id}`, { method: 'DELETE' }),
   },
-  draftReport: (inputs: ReportInputs, selectedNews: NewsItem[]) =>
-    j<{ narrative: ReportNarrative; snapshot: MarketSnapshot; provider: string }>(
-      '/api/report/draft',
-      postJson({ inputs, selectedNews }),
-    ),
-  assembleReport: (inputs: ReportInputs, context: AssembleContextPayload) =>
-    j<AssembleResult>('/api/report/assemble', postJson({ inputs, context })),
-  editReport: (action: EditAction, text: string, instruction?: string) =>
-    j<EditResult>('/api/report/edit', postJson({ action, text, instruction })),
+  // Report engine: AI-draft the narrative tokens (grounded in the client + figures).
+  reports: {
+    draftNarrative: (input: DraftNarrativePayload) =>
+      j<DraftNarrativeResult>('/api/report/narrative', postJson(input)),
+  },
 
-  // Saved, versioned report projects (§8B).
+  // Saved, versioned report projects (now hold report-engine state on `inputs`).
   projects: {
     list: () => j<ReportProjectSummary[]>('/api/report/projects'),
     get: (id: string) => j<ReportProject>(`/api/report/projects/${id}`),
@@ -445,16 +451,6 @@ export const api = {
         body: JSON.stringify(patch),
       }),
     remove: (id: string) => j<{ ok: boolean }>(`/api/report/projects/${id}`, { method: 'DELETE' }),
-  },
-
-  // User-definable document templates.
-  templates: {
-    list: () => j<DocumentTemplate[]>('/api/report/templates'),
-    get: (id: string) => j<DocumentTemplate>(`/api/report/templates/${id}`),
-    create: (input: NewTemplate) => j<DocumentTemplate>('/api/report/templates', postJson(input)),
-    update: (id: string, input: NewTemplate) =>
-      j<DocumentTemplate>(`/api/report/templates/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
-    remove: (id: string) => j<{ ok: boolean }>(`/api/report/templates/${id}`, { method: 'DELETE' }),
   },
 
   // Client records (CRM).

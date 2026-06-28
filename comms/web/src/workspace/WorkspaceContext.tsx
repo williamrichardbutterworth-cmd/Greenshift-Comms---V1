@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, type ReportProject } from '../lib/api';
-import { NewDocumentFlow, type NewDocRequest } from '../components/NewDocumentFlow';
+import { NewReportFlow, type NewDocRequest } from '../components/NewReportFlow';
 
 // One open document = one session. The session caches the project (with its latest
 // doc/inputs/context) so switching tabs re-seeds the studio without a refetch and
@@ -82,7 +82,7 @@ export function WorkspaceProvider({ children, onNavigateToDocuments }: {
   return (
     <Ctx.Provider value={value}>
       {children}
-      <NewDocumentFlow request={newReq} onCreated={(p) => { setNewReq(null); openDoc(p); }} onCancel={() => setNewReq(null)} />
+      <NewReportFlow request={newReq} onCreated={(p) => { setNewReq(null); openDoc(p); }} onCancel={() => setNewReq(null)} />
     </Ctx.Provider>
   );
 }

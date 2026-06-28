@@ -3,7 +3,8 @@ import {
   draftReport, assembleReport, editText, extractTranscript, analyzeSource, recommendNextStep, type ReportInputs,
 } from '../services/reportGenerator';
 import { listTemplates } from '../services/templatesStore';
-import type { AssembleContext, EditAction, SourceKind, RecommendClient } from '../services/prompts';
+import { draftReportNarrative } from '../services/reportNarrative';
+import type { AssembleContext, EditAction, SourceKind, RecommendClient, NarrativeFact } from '../services/prompts';
 import type { NewsItem } from '../providers/news/types';
 
 export async function reportRoutes(app: FastifyInstance): Promise<void> {
@@ -37,6 +38,12 @@ export async function reportRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/report/analyze', async (req) => {
     const body = req.body as { text?: string; kind?: SourceKind; inputs?: ReportInputs };
     return analyzeSource(body.text ?? '', body.kind ?? 'auto', body.inputs);
+  });
+
+  // Report engine: AI-draft the narrative tokens, grounded in the client + figures.
+  app.post('/api/report/narrative', async (req) => {
+    const body = req.body as { kind?: string; clientProfileId?: string; facts?: NarrativeFact[]; values?: Record<string, string> };
+    return draftReportNarrative({ kind: body.kind ?? '', clientProfileId: body.clientProfileId, facts: body.facts ?? [], values: body.values ?? {} });
   });
 
   // CRM: recommend the next best action for a client (templates loaded server-side).
