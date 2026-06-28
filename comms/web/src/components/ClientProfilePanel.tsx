@@ -1,7 +1,13 @@
 import { useState } from 'react';
 import { Pencil, Plus, Trash2, Gauge, Zap, Flame } from 'lucide-react';
 import type { ReportInputs, ClientMeter } from '../lib/api';
-import { CLIENT_FIELD_GROUPS, getField, getMeters, meterLabel } from '../lib/clientProfile';
+import { CLIENT_FIELD_GROUPS, getField, getMeters, getVars } from '../lib/clientProfile';
+import type { CustomerVariables, Fuel } from '../lib/loa';
+
+const FUELS: { key: Exclude<Fuel, ''>; label: string; icon: typeof Zap }[] = [
+  { key: 'electric', label: 'Electric', icon: Zap }, { key: 'gas', label: 'Gas', icon: Flame }, { key: 'both', label: 'Both', icon: Zap },
+];
+const fuelLabel = (f?: Fuel): string => (f === 'both' ? 'Gas & electric' : f === 'gas' ? 'Gas' : f === 'electric' ? 'Electric' : '');
 
 // The comprehensive client record: everything we hold in one place. Captured
 // fields show by default; blanks stay hidden until you edit (where every field +
@@ -19,10 +25,14 @@ export function ClientProfilePanel({ inputs, onSave }: {
   const save = async () => { await onSave(draft as ReportInputs); setEditing(false); };
   const set = (key: string, v: string) => setDraft((d) => ({ ...d, [key]: v }));
   const setMeters = (next: ClientMeter[]) => setDraft((d) => ({ ...d, meters: next }));
+  const draftFuel = getVars(draft as ReportInputs).fuel;
+  const setFuel = (f: Exclude<Fuel, ''>) =>
+    setDraft((d) => ({ ...d, customerVariables: { ...(d.customerVariables as CustomerVariables ?? {}), fuel: draftFuel === f ? '' : f } }));
 
   if (!editing) {
     const filledGroups = CLIENT_FIELD_GROUPS.map((g) => ({ g, fields: g.fields.filter((f) => getField(inputs, f.key)) })).filter((x) => x.fields.length);
-    const anything = filledGroups.length || meters.length;
+    const fuel = getVars(inputs).fuel;
+    const anything = filledGroups.length || meters.length || !!fuel;
     return (
       <section className="card p-5">
         <div className="flex items-center justify-between mb-3">
@@ -46,6 +56,14 @@ export function ClientProfilePanel({ inputs, onSave }: {
                 </div>
               </div>
             ))}
+            {fuel && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">What they buy</div>
+                <span className="inline-flex items-center gap-1.5 text-sm text-brand-ink rounded-lg border border-brand-line bg-brand-tint/50 px-2.5 py-1">
+                  <Zap size={13} className="text-brand-greenDark" /> {fuelLabel(fuel)}
+                </span>
+              </div>
+            )}
             {meters.length > 0 && (
               <div>
                 <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5 flex items-center gap-1"><Gauge size={11} /> Meters &amp; sites ({meters.length})</div>
@@ -83,6 +101,17 @@ export function ClientProfilePanel({ inputs, onSave }: {
             </div>
           </div>
         ))}
+        <div>
+          <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">What they buy</div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {FUELS.map(({ key, label, icon: Icon }) => (
+              <button key={key} type="button" onClick={() => setFuel(key)} aria-pressed={draftFuel === key}
+                className={'text-xs px-2.5 py-1 rounded-lg border inline-flex items-center gap-1 transition ' + (draftFuel === key ? 'border-brand-green bg-brand-tint text-brand-ink font-medium' : 'border-brand-line text-brand-muted hover:text-brand-ink')}>
+                <Icon size={12} /> {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <MetersEditor meters={meters} onChange={setMeters} />
       </div>
     </section>

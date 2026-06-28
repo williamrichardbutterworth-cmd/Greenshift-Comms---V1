@@ -12,7 +12,6 @@ import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, relativeTime, stageIndex
 import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '../lib/loa';
 import { ClientJourney } from './ClientJourney';
 import { EmailThread } from './EmailThread';
-import { CustomerVariablesEditor } from './CustomerVariablesEditor';
 import { ClientProfilePanel } from './ClientProfilePanel';
 
 const ACTIVITY_ICON: Record<ActivityType, typeof StickyNote> = {
@@ -380,17 +379,11 @@ export function ClientHub({
                   <span className={'text-[11px] font-medium ' + (known === total ? 'text-brand-green' : 'text-brand-muted')}>{known === total ? 'Ready' : `${known}/${total}`}</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-brand-line overflow-hidden mb-2"><div className="h-full bg-brand-green rounded-full" style={{ width: `${(known / total) * 100}%` }} /></div>
-                {cv?.fuel && <div className="text-xs text-brand-muted">Buys <span className="text-brand-ink capitalize">{cv.fuel === 'both' ? 'gas & electric' : cv.fuel}</span>{cv.services?.length ? ` · ${cv.services.slice(0, 3).join(', ')}` : ''}</div>}
+                {cv?.fuel && <div className="text-xs text-brand-muted">Buys <span className="text-brand-ink capitalize">{cv.fuel === 'both' ? 'gas & electric' : cv.fuel}</span></div>}
                 <p className="text-[11px] text-brand-muted mt-1.5">Complete &amp; export in the <span className="text-brand-greenDark">Letters of Authority</span> section.</p>
               </section>
             );
           })()}
-
-          {/* What they buy — client attribute that tailors reports */}
-          <CustomerVariablesEditor
-            value={((inputs as Record<string, unknown>).customerVariables as CustomerVariables | undefined) ?? {}}
-            onChange={(cv) => patch({ inputs: { ...inputs, customerVariables: cv } as ReportInputs })}
-          />
 
           {/* Tracker */}
           <section className="card p-4">

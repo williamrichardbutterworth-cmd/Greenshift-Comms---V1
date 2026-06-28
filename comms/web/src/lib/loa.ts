@@ -9,7 +9,10 @@ export interface LoaFieldValue { value: string; source: LoaSource }
 export type LoaData = Record<string, LoaFieldValue>;
 
 export type Fuel = 'gas' | 'electric' | 'both' | '';
-export interface CustomerVariables { fuel?: Fuel; services?: string[] }
+// Per-client "what they buy" — the fuel they purchase. Stored on
+// inputs.customerVariables; surfaced in the client record and used by the LOA
+// auto-population (N/A the meter they don't have).
+export interface CustomerVariables { fuel?: Fuel }
 
 export const LOA_FIELDS: { key: string; label: string; group: string; hint?: string }[] = [
   { key: 'customerName', label: 'Name of Customer', group: 'Company', hint: 'Full legal / trading name' },
@@ -107,17 +110,19 @@ export const LOA_LINE_H = 13;
 // block's centring.
 export interface LoaFieldPos { page: 1 | 2; x: number; vy: number; maxWidth: number; multiline?: boolean; maxLines?: number }
 export const LOA_FIELD_POS: Record<string, LoaFieldPos> = {
-  // page 1 — customer details (value column x≈200)
-  customerName: { page: 1, x: 200, vy: 186.8, maxWidth: 235 }, // "(I/we/us)" sits ~x=445
-  registeredNo: { page: 1, x: 200, vy: 218.3, maxWidth: 360 },
-  businessAddress: { page: 1, x: 200, vy: 247, maxWidth: 355, multiline: true, maxLines: 3 },
-  postcode: { page: 1, x: 200, vy: 302.8, maxWidth: 200 },
-  telephone: { page: 1, x: 200, vy: 333.8, maxWidth: 250 },
-  authorisedRep: { page: 1, x: 200, vy: 365.8, maxWidth: 355 },
-  email: { page: 1, x: 200, vy: 396.8, maxWidth: 355 },
-  mpan: { page: 1, x: 200, vy: 428.8, maxWidth: 250 },
-  mpr: { page: 1, x: 200, vy: 460.3, maxWidth: 250 },
-  siteAddresses: { page: 1, x: 200, vy: 489, maxWidth: 355, multiline: true, maxLines: 4 },
+  // page 1 — customer details. The value cell spans x≈200.6→538.8; values sit at
+  // x=212 (~11pt of left padding off the divider, matching the pre-printed text)
+  // and widths are capped to stay inside the right border (≤~533).
+  customerName: { page: 1, x: 212, vy: 186.8, maxWidth: 230 }, // "(I/we/us)" sits ~x=456
+  registeredNo: { page: 1, x: 212, vy: 218.3, maxWidth: 321 },
+  businessAddress: { page: 1, x: 212, vy: 247, maxWidth: 321, multiline: true, maxLines: 3 },
+  postcode: { page: 1, x: 212, vy: 302.8, maxWidth: 200 },
+  telephone: { page: 1, x: 212, vy: 333.8, maxWidth: 250 },
+  authorisedRep: { page: 1, x: 212, vy: 365.8, maxWidth: 321 },
+  email: { page: 1, x: 212, vy: 396.8, maxWidth: 321 },
+  mpan: { page: 1, x: 212, vy: 428.8, maxWidth: 250 },
+  mpr: { page: 1, x: 212, vy: 460.3, maxWidth: 250 },
+  siteAddresses: { page: 1, x: 212, vy: 489, maxWidth: 321, multiline: true, maxLines: 4 },
   // page 2 — signature block (value baselines sit on the dotted lines)
   signatoryName: { page: 2, x: 363, vy: 587, maxWidth: 175 },
   position: { page: 2, x: 82, vy: 650, maxWidth: 200 },

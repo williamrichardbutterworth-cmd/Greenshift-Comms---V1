@@ -71,9 +71,9 @@ export function mergeIntakeIntoInputs(prev: ReportInputs, r: ClientIntakeResult)
   // meters (replace if we found any and none stored yet)
   if (r.meters.length && !getMeters(prev).length) next.meters = r.meters;
   put('sites', meterSites(r.meters));
-  // customer variables (fuel/services)
+  // what they buy (fuel) — auto-extracted; existing choice wins
   const cv = getVars(prev);
-  next.customerVariables = { fuel: cv.fuel || r.fuel, services: cv.services?.length ? cv.services : r.services } as CustomerVariables;
+  next.customerVariables = { fuel: cv.fuel || r.fuel } as CustomerVariables;
   void looksEmail;
   return next as ReportInputs;
 }
