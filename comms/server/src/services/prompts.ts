@@ -350,7 +350,8 @@ ${factLines || '(none yet)'}`;
       system: HOUSE_RULES,
       prompt: `Draft the narrative prose for a Green Shift Energy Procure-Ahead market brief ${header}
 
-The "Forward curve" signal drives the stance: "backwardation" = the whole forward slopes down → act now / fix a longer term; "value" = a specific forward window is cheaper than the front → consider fixing into that window; "contango" = nothing forward is cheaper → hold or take a shorter fix. Tailor the stance to the signal given.
+This report is built around the UK power FORWARD CURVE (the price of each forward delivery period). The "Curve signal" drives the stance: "backwardation" = the whole forward slopes down → act now / fix a longer term; "value" = a specific forward window is cheaper than the front → consider fixing into that window; "contango" = nothing forward is cheaper → hold or take a shorter fix. Tailor the stance to the signal given.
+If a "Renewal window on the forward curve" figure is given, ANCHOR the "what this means for you" on it — that is the forward price for the delivery period THIS client will be buying once their contract ends; compare it to the front of the curve and the overall shape, and make the recommendation about securing (or not) that specific window ahead.
 
 Return ONLY JSON in exactly this shape:
 {

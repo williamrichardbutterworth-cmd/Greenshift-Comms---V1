@@ -60,7 +60,9 @@ export interface ProcureData {
   dayAheadPower: ProcureCard;
   gas: ProcureCard;
   brent: ProcureCard;
-  trendPoints: { t: string; v: number }[];
+  /** The power forward curve (the dashboard's curve): each forward delivery period + price. */
+  curveLegs: { label: string; value: number }[];
+  curveUnit: string;
   signal: 'backwardation' | 'value' | 'contango' | '';
   curveAsOf?: string;
 }

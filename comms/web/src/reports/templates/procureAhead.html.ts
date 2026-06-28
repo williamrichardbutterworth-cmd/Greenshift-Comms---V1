@@ -1,6 +1,7 @@
 // GREEN SHIFT · TEMPLATE 02 — PROCUREMENT / MARKET REPORT (tokenised)
-// The user's pixel-perfect HTML, verbatim CSS. Market figures + deltas are tokens;
-// the 12-month trend SVG is generated from the real power series → {{{trendSvg}}}.
+// The user's pixel-perfect HTML, verbatim CSS. Market figures + deltas are tokens; the
+// chart is the UK power FORWARD CURVE (the dashboard's curve) generated from the real
+// forward legs → {{{forwardCurveSvg}}}, with the client's renewal period marked on it.
 export const PROCURE_AHEAD_HTML = `<!doctype html>
 <html lang="en-GB">
 <head>
@@ -156,10 +157,10 @@ export const PROCURE_AHEAD_HTML = `<!doctype html>
   <section>
     <div class="chartwrap">
       <div class="chart-head">
-        <div class="chart-title">UK power &mdash; 12-month trend</div>
-        <div class="chart-legend"><span class="swatch"></span> &pound;/MWh</div>
+        <div class="chart-title">UK power baseload &mdash; forward curve</div>
+        <div class="chart-legend"><span class="swatch"></span> &pound;/MWh by delivery period</div>
       </div>
-      {{{trendSvg}}}
+      {{{forwardCurveSvg}}}
       <p class="chart-cap">{{chartCaption}}</p>
     </div>
   </section>
