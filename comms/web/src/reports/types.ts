@@ -79,6 +79,10 @@ export interface ReportState {
   title: string;
   values: Record<string, string>;   // editable token values (meta + narrative + bound text)
   data: ReportData;
+  /** Inline edits made directly on the A4 page — the report's `.sheet` body HTML
+   * (blocks + manual page breaks). When set, it overrides the template render until
+   * the user resets to the template. */
+  editedHtml?: string;
 }
 
 // Headline facts a template exposes — drives the studio header and the email handoff.

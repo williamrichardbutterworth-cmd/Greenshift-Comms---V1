@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  FileDown, Sheet, Code2, Printer, Loader2, Sparkles, Check, ChevronDown, RefreshCw, TrendingDown, TrendingUp, Mail, Copy, X,
+  FileDown, Sheet, Code2, Printer, Loader2, Sparkles, Check, ChevronDown, RefreshCw, TrendingDown, TrendingUp, Mail, Copy, X, Pencil,
 } from 'lucide-react';
 import { api, type ReportProject, type ReportInputs, type ClientProfile } from '../../lib/api';
 import { getReportTemplate } from '../../reports/registry';
@@ -8,8 +8,9 @@ import { renderTemplate, annualCost, parseNum, money0 } from '../../reports/engi
 import { stateFromProject, patchFromState } from '../../reports/state';
 import { loadProcureData } from '../../reports/templates/procureAhead';
 import type { ReportState, CostData, CurrentPosition, TemplateField, ProcureData, ReportTemplate } from '../../reports/types';
-import { exportIframePdf, printIframe, downloadHtml, download, slug } from '../../reports/export';
+import { downloadHtml, download, slug } from '../../reports/export';
 import { QuotesGrid } from './QuotesGrid';
+import { ReportEditor, type ReportEditorHandle } from './ReportEditor';
 
 const EMPTY_CURRENT: CurrentPosition = { supplier: '', product: '', unitRate: '', standing: '', termStatus: '' };
 
@@ -19,11 +20,15 @@ export function ReportStudio({ project, onProjectSaved }: {
 }) {
   const [state, setState] = useState<ReportState>(() => stateFromProject(project) ?? blankState(project));
   const template = getReportTemplate(state.templateId);
+  // Freshest state/project for the unmount flush (refs so the cleanup never reads a stale copy).
+  const stateRef = useRef(state); stateRef.current = state;
+  const projectRef = useRef(project); projectRef.current = project;
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [busy, setBusy] = useState<null | 'pdf' | 'xlsx' | 'ai' | 'market'>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [email, setEmail] = useState<null | { loading?: boolean; subject?: string; body?: string; error?: string; logged?: boolean }>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [pageCount, setPageCount] = useState(1);
+  const editorRef = useRef<ReportEditorHandle>(null);
   // Two-way binding to the client record (single source of truth).
   const [client, setClient] = useState<ClientProfile | null>(null);
   const clientRef = useRef<ClientProfile | null>(null); // freshest client for write-back merges
@@ -39,10 +44,6 @@ export function ReportStudio({ project, onProjectSaved }: {
     () => (template && computed ? renderTemplate(template.html, computed.tokens, computed.lists) : ''),
     [template, computed],
   );
-
-  // Debounced preview so the iframe doesn't reload on every keystroke.
-  const [preview, setPreview] = useState(html);
-  useEffect(() => { const t = setTimeout(() => setPreview(html), 200); return () => clearTimeout(t); }, [html]);
 
   // ── autosave (+ flush two-way client-record writes) ──
   const dirty = useRef(false);
@@ -116,6 +117,31 @@ export function ReportStudio({ project, onProjectSaved }: {
     try { setProcure(await loadProcureData()); } finally { setBusy(null); }
   };
 
+  // ── flush on unmount ──
+  // Switching document tabs unmounts this studio, and both debounce windows (editor 280ms,
+  // autosave 800ms) would otherwise be cancelled — dropping the most recent edit. We push the
+  // latest state into the in-memory workspace session synchronously (so a remount restores it)
+  // and fire a durable save in the background. One-shot: the editor's page-edit flush and this
+  // studio's field-edit flush can both fire during the same teardown; whichever runs first wins.
+  const flushed = useRef(false);
+  const persistNow = useCallback((body?: string) => {
+    if (flushed.current) return;
+    // A page-edit flush (body provided) always persists — the edit may not have emitted yet,
+    // so `dirty` can still be false. A field-only flush requires a pending change.
+    if (body == null && !dirty.current) return;
+    flushed.current = true;
+    const base = stateRef.current;
+    // The editor only passes a body when the page was genuinely edited, so adopt it
+    // unconditionally (covers even a first keystroke made and switched away inside the debounce
+    // window). No body → just flush the field edits already sitting in state.
+    const latest: ReportState = body != null ? { ...base, editedHtml: body } : base;
+    const proj = projectRef.current;
+    onProjectSaved({ ...proj, name: latest.title, inputs: latest as unknown as ReportInputs });
+    api.projects.update(proj.id, patchFromState(latest)).catch(() => {});
+  }, [onProjectSaved]);
+  const persistRef = useRef(persistNow); persistRef.current = persistNow;
+  useEffect(() => () => persistRef.current(), []); // field-only edits (no page edit) on unmount
+
   if (!template) {
     return <div className="card p-10 text-center text-brand-muted">This report’s template isn’t available. It may have been renamed or removed.</div>;
   }
@@ -124,15 +150,15 @@ export function ReportStudio({ project, onProjectSaved }: {
   const aiGroupTitle = template.kind === 'cost-comparison' ? 'Narrative & recommendation' : 'Outlook & our view';
 
   const fileBase = slug(state.title);
-  const flushPreview = async () => { setPreview(html); await new Promise((r) => setTimeout(r, 260)); };
+  // Inline page edits → stored as the editedHtml override; the data panel pre-fills the
+  // report, but once you edit the page directly your edits win until you reset.
+  const setEditedBody = useCallback((body: string) => mutate((s) => ({ ...s, editedHtml: body })), [mutate]);
+  const resetToTemplate = () => mutate((s) => ({ ...s, editedHtml: undefined }));
 
   const exportPdf = async () => {
     setExportOpen(false); setBusy('pdf');
-    try {
-      await flushPreview();
-      if (iframeRef.current) await exportIframePdf(iframeRef.current, `${fileBase}.pdf`);
-      logDoc('Generated PDF report');
-    } catch { /* surfaced by the disabled state lifting */ } finally { setBusy(null); }
+    try { await editorRef.current?.exportPdf(`${fileBase}.pdf`); logDoc('Generated PDF report'); }
+    catch { /* surfaced by the disabled state lifting */ } finally { setBusy(null); }
   };
   const exportXlsx = async () => {
     setExportOpen(false); setBusy('xlsx');
@@ -140,8 +166,8 @@ export function ReportStudio({ project, onProjectSaved }: {
       if (template.excel) { const blob = await template.excel(state, null); download(blob, `${fileBase}.xlsx`); logDoc('Generated Excel comparison'); }
     } catch { /* no-op */ } finally { setBusy(null); }
   };
-  const exportHtml = () => { setExportOpen(false); downloadHtml(html, `${fileBase}.html`); };
-  const doPrint = async () => { setExportOpen(false); await flushPreview(); if (iframeRef.current) printIframe(iframeRef.current); };
+  const exportHtml = () => { setExportOpen(false); downloadHtml(editorRef.current?.getDocHtml() ?? html, `${fileBase}.html`); };
+  const doPrint = () => { setExportOpen(false); editorRef.current?.print(); };
 
   const logDoc = (title: string) => {
     if (state.clientProfileId) api.profiles.addActivity(state.clientProfileId, { type: 'document', title: `${title} — ${state.title}` }).catch(() => {});
@@ -216,6 +242,13 @@ export function ReportStudio({ project, onProjectSaved }: {
               )}
             </div>
           </div>
+          {state.editedHtml != null && (
+            <div className="mt-3 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 flex items-start gap-2">
+              <Pencil size={13} className="text-amber-600 mt-0.5 shrink-0" />
+              <div className="flex-1 text-[11px] text-amber-800 leading-snug">You’ve edited the page directly — the fields below no longer drive it.
+                <button className="ml-1 font-medium text-brand-greenDark hover:underline" onClick={resetToTemplate}>Reset to template</button> to go back to data-driven.</div>
+            </div>
+          )}
         </section>
 
         <Group title="Report details">{fieldsFor('Report').map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</Group>
@@ -274,11 +307,10 @@ export function ReportStudio({ project, onProjectSaved }: {
         <Group title="Footer">{fieldsFor('Footer').map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</Group>
       </div>
 
-      {/* ── Live preview ── */}
+      {/* ── Editable A4 document ── */}
       <div className="xl:sticky xl:top-[calc(var(--topbar-h)+16px)]">
-        <div className="rounded-lg overflow-hidden ring-1 ring-brand-line shadow-soft bg-[#eceae6]">
-          <iframe ref={iframeRef} srcDoc={preview} title="Report preview" className="w-full h-[calc(100vh-var(--topbar-h)-56px)] min-h-[600px] border-0 bg-[#eceae6]" />
-        </div>
+        <ReportEditor ref={editorRef} html={html} editedBody={state.editedHtml} onChange={setEditedBody} onPageCount={setPageCount} onFlush={persistNow} />
+        <div className="text-center text-[11px] text-brand-muted mt-1.5">{pageCount} page{pageCount === 1 ? '' : 's'} · A4</div>
       </div>
 
       {email && <CoveringEmailModal email={email} onChange={setEmail} onClose={() => setEmail(null)} onLog={logEmailToClient} canLog={!!state.clientProfileId} />}
