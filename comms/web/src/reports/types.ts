@@ -48,9 +48,26 @@ export interface CostData {
   quotes: QuoteRow[];
 }
 
+// ── Procure-ahead datasets (live market figures + forward-curve read) ──
+export interface ProcureCard {
+  value: string;       // the headline number (unit comes from the template)
+  deltaText: string;   // e.g. "£7 (8%)"
+  dir: 'down' | 'up' | 'flat';
+}
+export interface ProcureData {
+  asOf: string;
+  frontYearPower: ProcureCard;
+  dayAheadPower: ProcureCard;
+  gas: ProcureCard;
+  brent: ProcureCard;
+  trendPoints: { t: string; v: number }[];
+  signal: 'backwardation' | 'value' | 'contango' | '';
+  curveAsOf?: string;
+}
+
 export interface ReportData {
   cost?: CostData;
-  // procure-ahead datasets land here in Phase 2 (forwardCurveId, etc.)
+  procure?: ProcureData;
 }
 
 // The persisted report instance (stored on the project's `inputs` jsonb).

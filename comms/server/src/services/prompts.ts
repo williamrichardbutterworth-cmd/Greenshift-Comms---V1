@@ -521,15 +521,43 @@ export function reportFillPrompt(
   _values: Record<string, string>,
 ) {
   const factLines = facts.map((f) => `- ${f.label}: ${f.value}`).join('\n');
-  return {
-    system: HOUSE_RULES,
-    prompt: `Draft the narrative prose for a Green Shift Energy ${kind === 'cost-comparison' ? 'Cost Comparison report' : 'report'} for a UK business energy customer. The figures below are ALREADY computed and FINAL — refer to them, never change or invent numbers.
+  const header = `for a UK business energy customer. The figures below are ALREADY computed and FINAL — refer to them, never change or invent numbers.
 
 Client:
 ${JSON.stringify(inputs, null, 2)}
 
 Key figures (already worked out — be consistent with these, do not alter):
-${factLines || '(none yet)'}
+${factLines || '(none yet)'}`;
+  const rules = `Rules: Use ONLY the details and figures provided — never invent a price, supplier, figure or date. Concise, professional UK English. This is general commentary, NOT a personal recommendation to trade/hedge or a guaranteed quotation. No markdown, no placeholders.`;
+
+  if (kind === 'procure-ahead') {
+    return {
+      system: HOUSE_RULES,
+      prompt: `Draft the narrative prose for a Green Shift Energy Procure-Ahead market brief ${header}
+
+The "Forward curve" signal drives the stance: "backwardation" = the whole forward slopes down → act now / fix a longer term; "value" = a specific forward window is cheaper than the front → consider fixing into that window; "contango" = nothing forward is cheaper → hold or take a shorter fix. Tailor the stance to the signal given.
+
+Return ONLY JSON in exactly this shape:
+{
+  "chartCaption": "1 sentence reading the 12-month power trend.",
+  "commentaryDrivers": "2-3 sentences on what's moving the market right now.",
+  "commentaryOutlook": "2-3 sentences on the balanced outlook ahead.",
+  "implication": "2 sentences on what this means for THIS client given their contract end date.",
+  "stanceTag": "a 2-4 word tag matching the signal (e.g. 'Act — window open', 'Hold — no discount ahead').",
+  "stanceHeadline": "a short imperative headline matching the signal.",
+  "stanceRationale": "1-2 sentences setting up the talking points.",
+  "talkingPoint1": "one talking point.",
+  "talkingPoint2": "one talking point.",
+  "talkingPoint3": "one talking point.",
+  "talkingPoint4": "one talking point about Green Shift monitoring the market and re-tendering ahead of expiry."
+}
+${rules}`,
+    };
+  }
+
+  return {
+    system: HOUSE_RULES,
+    prompt: `Draft the narrative prose for a Green Shift Energy Cost Comparison report ${header}
 
 Return ONLY JSON in exactly this shape:
 {
@@ -538,7 +566,7 @@ Return ONLY JSON in exactly this shape:
   "recommendationTitle": "a short imperative headline naming the recommended supplier and term.",
   "recommendationRationale": "2-3 sentences on why this option — budget certainty, removing price risk, lowest all-in cost of the panel."
 }
-Rules: Use ONLY the details and figures provided — never invent a price, supplier, figure or date. Concise, warm, professional UK English. This is general commentary, not a personal recommendation to trade or a guaranteed quotation. No markdown, no placeholders.`,
+${rules}`,
   };
 }
 

@@ -7,7 +7,10 @@ import { getClientProfile } from './clientProfilesStore';
 // and the already-computed figures. Never throws — degrades to provider:'none'/'error'.
 export interface NarrativeResult { values: Record<string, string>; provider: string; error?: string }
 
-const KEYS = ['summaryCurrent', 'summaryRecommended', 'recommendationTitle', 'recommendationRationale'];
+const KEYS_BY_KIND: Record<string, string[]> = {
+  'cost-comparison': ['summaryCurrent', 'summaryRecommended', 'recommendationTitle', 'recommendationRationale'],
+  'procure-ahead': ['chartCaption', 'commentaryDrivers', 'commentaryOutlook', 'implication', 'stanceTag', 'stanceHeadline', 'stanceRationale', 'talkingPoint1', 'talkingPoint2', 'talkingPoint3', 'talkingPoint4'],
+};
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 export async function draftReportNarrative(input: {
@@ -22,9 +25,10 @@ export async function draftReportNarrative(input: {
     const inputs = (profile?.inputs ?? {}) as ReportInputs;
     const ai = getAI();
     const { system, prompt } = reportFillPrompt(input.kind, inputs, input.facts ?? [], input.values ?? {});
-    const res = await ai.generateJSON<Record<string, unknown>>({ system, prompt, maxTokens: 900 });
+    const res = await ai.generateJSON<Record<string, unknown>>({ system, prompt, maxTokens: 1100 });
+    const keys = KEYS_BY_KIND[input.kind] ?? KEYS_BY_KIND['cost-comparison'];
     const out: Record<string, string> = {};
-    for (const k of KEYS) { const v = str(res?.[k]); if (v) out[k] = v; }
+    for (const k of keys) { const v = str(res?.[k]); if (v) out[k] = v; }
     return { values: out, provider: ai.name };
   } catch (e) {
     return { values: {}, provider: 'error', error: (e as Error).message };

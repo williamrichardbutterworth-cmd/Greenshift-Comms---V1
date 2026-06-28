@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  FileDown, Sheet, Code2, Printer, Loader2, Sparkles, Check, ChevronDown,
+  FileDown, Sheet, Code2, Printer, Loader2, Sparkles, Check, ChevronDown, RefreshCw, TrendingDown, TrendingUp,
 } from 'lucide-react';
 import { api, type ReportProject } from '../../lib/api';
 import { getReportTemplate } from '../../reports/registry';
 import { renderTemplate, annualCost, parseNum, money0 } from '../../reports/engine';
 import { stateFromProject, patchFromState } from '../../reports/state';
-import type { ReportState, CostData, CurrentPosition, TemplateField } from '../../reports/types';
+import { loadProcureData } from '../../reports/templates/procureAhead';
+import type { ReportState, CostData, CurrentPosition, TemplateField, ProcureData } from '../../reports/types';
 import { exportIframePdf, printIframe, downloadHtml, download, slug } from '../../reports/export';
 import { QuotesGrid } from './QuotesGrid';
 
@@ -19,7 +20,7 @@ export function ReportStudio({ project, onProjectSaved }: {
   const [state, setState] = useState<ReportState>(() => stateFromProject(project) ?? blankState(project));
   const template = getReportTemplate(state.templateId);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
-  const [busy, setBusy] = useState<null | 'pdf' | 'xlsx' | 'ai'>(null);
+  const [busy, setBusy] = useState<null | 'pdf' | 'xlsx' | 'ai' | 'market'>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -60,11 +61,27 @@ export function ReportStudio({ project, onProjectSaved }: {
     mutate((s) => ({ ...s, data: { ...s.data, cost: { current: { ...EMPTY_CURRENT, ...s.data.cost?.current, ...patch }, quotes: s.data.cost?.quotes ?? [] } } }));
   const setQuotes = (quotes: CostData['quotes']) =>
     mutate((s) => ({ ...s, data: { ...s.data, cost: { current: s.data.cost?.current ?? { ...EMPTY_CURRENT }, quotes } } }));
+  const setProcure = (procure: ProcureData) => mutate((s) => ({ ...s, data: { ...s.data, procure } }));
+
+  // Procure-ahead: pull the live market figures + forward-curve read on first open.
+  useEffect(() => {
+    if (template?.kind !== 'procure-ahead' || state.data.procure) return;
+    let cancelled = false;
+    setBusy('market');
+    loadProcureData().then((p) => { if (!cancelled) setProcure(p); }).finally(() => { if (!cancelled) setBusy(null); });
+    return () => { cancelled = true; };
+  }, [template?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  const refreshMarket = async () => {
+    setBusy('market');
+    try { setProcure(await loadProcureData()); } finally { setBusy(null); }
+  };
 
   if (!template) {
     return <div className="card p-10 text-center text-brand-muted">This report’s template isn’t available. It may have been renamed or removed.</div>;
   }
   const fieldsFor = (group: string) => template.fields.filter((f) => f.group === group);
+  const aiGroup = template.kind === 'cost-comparison' ? 'Recommendation' : 'Outlook';
+  const aiGroupTitle = template.kind === 'cost-comparison' ? 'Narrative & recommendation' : 'Outlook & our view';
 
   const fileBase = slug(state.title);
   const flushPreview = async () => { setPreview(html); await new Promise((r) => setTimeout(r, 260)); };
@@ -123,9 +140,11 @@ export function ReportStudio({ project, onProjectSaved }: {
             <button className="btn-primary !py-1.5 flex-1" onClick={exportPdf} disabled={!!busy}>
               {busy === 'pdf' ? <Loader2 size={15} className="animate-spin" /> : <FileDown size={15} />} PDF
             </button>
-            <button className="btn-ghost !py-1.5" onClick={exportXlsx} disabled={!!busy} title="Download the matching Excel comparison">
-              {busy === 'xlsx' ? <Loader2 size={15} className="animate-spin" /> : <Sheet size={15} />} Excel
-            </button>
+            {template.excel && (
+              <button className="btn-ghost !py-1.5" onClick={exportXlsx} disabled={!!busy} title="Download the matching Excel comparison">
+                {busy === 'xlsx' ? <Loader2 size={15} className="animate-spin" /> : <Sheet size={15} />} Excel
+              </button>
+            )}
             <div className="relative">
               <button className="btn-ghost !py-1.5 !px-2" onClick={() => setExportOpen((o) => !o)} title="More export options"><ChevronDown size={15} /></button>
               {exportOpen && (
@@ -166,14 +185,26 @@ export function ReportStudio({ project, onProjectSaved }: {
           </>
         )}
 
+        {template.kind === 'procure-ahead' && (
+          <section className="card p-4">
+            <div className="flex items-center justify-between mb-2.5">
+              <h3 className="label">Live market data</h3>
+              <button className="btn-ghost !py-1 !px-2 text-xs" onClick={refreshMarket} disabled={!!busy} title="Re-pull live figures + the latest forward curve">
+                {busy === 'market' ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Refresh
+              </button>
+            </div>
+            <MarketCards procure={state.data.procure} loading={busy === 'market'} />
+          </section>
+        )}
+
         <section className="card p-4">
           <div className="flex items-center justify-between mb-2.5">
-            <h3 className="label">Narrative &amp; recommendation</h3>
+            <h3 className="label">{aiGroupTitle}</h3>
             <button className="btn-ghost !py-1 !px-2 text-xs" onClick={aiDraft} disabled={!!busy} title="Draft the narrative from this client + the figures">
               {busy === 'ai' ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />} AI draft
             </button>
           </div>
-          <div className="space-y-2.5">{fieldsFor('Recommendation').map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</div>
+          <div className="space-y-2.5">{fieldsFor(aiGroup).map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</div>
         </section>
 
         <Group title="Footer">{fieldsFor('Footer').map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</Group>
@@ -216,6 +247,39 @@ function Field({ f, value, onChange }: { f: TemplateField; value: string; onChan
         <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={f.placeholder} className="input !py-1.5 text-sm" />
       )}
       {f.help && <p className="text-[10px] text-brand-muted/80 mt-0.5">{f.help}</p>}
+    </div>
+  );
+}
+
+function MarketCards({ procure, loading }: { procure?: ProcureData; loading: boolean }) {
+  if (!procure && loading) return <div className="text-sm text-brand-muted inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Pulling live figures…</div>;
+  if (!procure) return <p className="text-sm text-brand-muted">No market data yet — click Refresh.</p>;
+  const cards = [
+    { k: 'Front-year baseload power', c: procure.frontYearPower, unit: '£/MWh', pre: '£' },
+    { k: 'Day-ahead power', c: procure.dayAheadPower, unit: '£/MWh', pre: '£' },
+    { k: 'NBP gas (front-month)', c: procure.gas, unit: 'p/th', pre: '' },
+    { k: 'Brent crude', c: procure.brent, unit: '$/bbl', pre: '$' },
+  ];
+  const sigTone = procure.signal === 'backwardation' ? 'bg-brand-tint text-brand-greenDark' : procure.signal === 'value' ? 'bg-amber-50 text-amber-700' : 'bg-brand-line/40 text-brand-muted';
+  return (
+    <div>
+      <div className="grid grid-cols-2 gap-2">
+        {cards.map(({ k, c, unit, pre }) => (
+          <div key={k} className="rounded-lg border border-brand-line p-2.5">
+            <div className="text-[10px] uppercase tracking-wide text-brand-muted leading-tight min-h-[24px]">{k}</div>
+            <div className="font-mono font-semibold text-lg mt-1">{c.value === '—' ? '—' : `${pre}${c.value}`}<span className="text-[10px] text-brand-muted font-normal"> {unit}</span></div>
+            {c.deltaText && (
+              <div className={'text-[11px] font-mono inline-flex items-center gap-1 ' + (c.dir === 'down' ? 'text-brand-greenDark' : c.dir === 'up' ? 'text-amber-600' : 'text-brand-muted')}>
+                {c.dir === 'down' ? <TrendingDown size={11} /> : c.dir === 'up' ? <TrendingUp size={11} /> : null}{c.deltaText}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 mt-2.5 text-[11px]">
+        {procure.signal && <span className={'px-1.5 py-0.5 rounded font-medium capitalize ' + sigTone}>Forward curve: {procure.signal}</span>}
+        <span className="text-brand-muted ml-auto">{procure.asOf}</span>
+      </div>
     </div>
   );
 }
