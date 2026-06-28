@@ -403,6 +403,11 @@ export interface ClientIntakeResult {
 }
 export interface ClientIntakePayload { website?: string; transcript?: string; fileTexts?: string[]; images?: { base64: string; mime?: string }[]; }
 
+// ── Bill analysis (the swarm) ──
+export type BillConfidence = 'high' | 'medium' | 'low';
+export interface BillField { key: string; value: string; source: string; confidence: BillConfidence; }
+export interface BillAnalysisResult { fields: BillField[]; provider: string; error?: string; }
+
 // ── Email dialogue ──
 export interface EmailMsg { direction: 'in' | 'out'; subject?: string; body: string; at?: string; }
 export interface EmailDraft { subject: string; body: string; provider: string; error?: string; }
@@ -507,6 +512,12 @@ export const api = {
   // Comprehensive new-client intake (website + transcript + bills → one profile).
   client: {
     intake: (payload: ClientIntakePayload) => j<ClientIntakeResult>('/api/client/intake', postJson(payload)),
+  },
+
+  // Bill analysis swarm — extract supplier/meter/rates/contract with source provenance.
+  bill: {
+    analyze: (input: { text?: string; image?: { base64: string; mime?: string } }) =>
+      j<BillAnalysisResult>('/api/bill/analyze', postJson(input)),
   },
 
   // Mine a pasted call transcript for client details.

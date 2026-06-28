@@ -12,14 +12,16 @@ import { ideasRoutes } from './routes/ideas';
 import { forwardCurveRoutes } from './routes/forwardCurve';
 import { loaRoutes } from './routes/loa';
 import { emailRoutes } from './routes/email';
+import { billRoutes } from './routes/bill';
 
 // Builds the Fastify app WITHOUT listening or starting the scheduler, so the
 // exact same app can run as a long-lived local server (index.ts) or be wrapped
 // in a single Vercel serverless function (../../api/[...path].ts).
 export async function buildApp(): Promise<FastifyInstance> {
-  // 8MB body cap leaves room for base64 file uploads (Vercel still caps the
-  // request at ~4.5MB on Hobby, so practical uploads are ~3MB).
-  const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
+  // 12MB body cap: a ~6MB file (the upload cap) is ~8MB once base64-encoded, plus the
+  // JSON envelope — so 8MB would 413 a max-size upload before validation. (Vercel still
+  // caps the request at ~4.5MB on Hobby, so cloud uploads are smaller in practice.)
+  const app = Fastify({ logger: false, bodyLimit: 12 * 1024 * 1024 });
   await app.register(cors, { origin: true }); // harmless: API is same-origin on Vercel
 
   // Friendly pointer for anyone opening the backend directly. In prod the
@@ -49,6 +51,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(forwardCurveRoutes);
   await app.register(loaRoutes);
   await app.register(emailRoutes);
+  await app.register(billRoutes);
 
   return app;
 }

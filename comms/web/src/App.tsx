@@ -6,6 +6,7 @@ import { NewsFeed } from './components/NewsFeed';
 import { IdeasBoard } from './components/IdeasBoard';
 import { ClientsHome } from './components/ClientsHome';
 import { LoaSection } from './components/LoaSection';
+import { BillAnalysis } from './components/BillAnalysis';
 import { WorkspaceProvider, useWorkspace } from './workspace/WorkspaceContext';
 import { usePersisted } from './lib/usePersisted';
 
@@ -43,8 +44,9 @@ function Shell({ section, setSection, collapsed, onToggleCollapse, loaClientId, 
   onLoaConsumed: () => void;
 }) {
   const ws = useWorkspace();
-  // The Documents studio + the wider Clients hub are full-bleed; other surfaces stay capped.
-  const wide = section === 'documents' || section === 'report';
+  // The Documents studio, the wider Clients hub, and the bill analyser (side-by-side)
+  // are full-bleed; other surfaces stay capped.
+  const wide = section === 'documents' || section === 'report' || section === 'bills';
 
   return (
     <div className="flex min-h-full">
@@ -60,6 +62,7 @@ function Shell({ section, setSection, collapsed, onToggleCollapse, loaClientId, 
           {section === 'brief' && <DailyReview />}
           {section === 'news' && <NewsFeed />}
           {section === 'report' && <ClientsHome onOpenLoa={onOpenLoa} />}
+          {section === 'bills' && <BillAnalysis />}
           {section === 'loa' && <LoaSection initialClientId={loaClientId} onConsumed={onLoaConsumed} />}
           {section === 'documents' && (
             <Suspense fallback={<div className="card p-10 text-center text-brand-muted">Loading workspace…</div>}>

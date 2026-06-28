@@ -432,3 +432,33 @@ Guidance:
 - Use ONLY what's in the sources. UK English. Never invent a company number, MPAN, MPRN, postcode or price.`,
   };
 }
+
+// ── Bill analysis "swarm": specialised extractors, one focus area each, run in
+// parallel. Each returns its fields with a verbatim source quote + confidence so the
+// agent can show WHERE on the bill every value came from and double-check it. ──
+export interface BillPass { id: string; keys: string[]; focus: string }
+export const BILL_PASSES: BillPass[] = [
+  { id: 'identity', keys: ['supplier', 'accountNumber', 'companyName', 'businessAddress', 'postcode', 'billDate'],
+    focus: 'the energy SUPPLIER name, the account/customer reference number, the customer company/business name, the full supply or business address, the postcode, and the bill issue date' },
+  { id: 'meter', keys: ['meterType', 'mpan', 'mprn', 'consumption'],
+    focus: 'whether this is an ELECTRICITY or GAS bill (meterType = "electric" or "gas"), the MPAN (the long electricity supply number, often laid out in a grid with an "S" / "Supply Number"), the MPRN (gas Meter Point Reference Number), and the consumption in kWh (annual if shown, otherwise the billed-period usage — include the period in the source)' },
+  { id: 'rates', keys: ['currentUnitRate', 'currentStanding', 'totalAmount'],
+    focus: 'the unit rate in pence per kWh (p/kWh), the standing charge in pence per day (p/day), and the total amount due on this bill. If multiple rates exist (day/night, or per-meter), give the primary/most prominent unit rate as the value and note the others verbatim in the source' },
+  { id: 'contract', keys: ['contractEnd', 'currentProduct'],
+    focus: 'the contract END date (or fixed-term expiry / renewal date), and the tariff or product name (e.g. "Fixed 24 month", "Out of contract", "Deemed", "Variable")' },
+];
+
+export function billPassPrompt(pass: BillPass, text: string | undefined, hasImage: boolean) {
+  return {
+    system: HOUSE_RULES,
+    prompt: `You are a meticulous UK energy-bill analyst. Extract ONLY ${pass.focus}, from the bill below.${hasImage ? ' The bill is attached as an image — read it carefully, including small print and meter grids.' : ''}${text ? `\n\nBILL TEXT:\n"""\n${text.slice(0, 14000)}\n"""` : ''}
+
+Return ONLY JSON in exactly this shape:
+{
+  "fields": {
+${pass.keys.map((k) => `    "${k}": { "value": "", "source": "", "confidence": "" }`).join(',\n')}
+  }
+}
+For EACH field: "value" = the clean extracted value (numbers only for rates/consumption — "24.50" not "24.50p/kWh"; a date as written on the bill); "source" = the EXACT verbatim text from the bill you took it from, quoted word-for-word so it can be located on the page; "confidence" = "high" | "medium" | "low". If a field genuinely isn't present on the bill, set its value and source to "". NEVER invent or guess a value — extract only what is actually shown.`,
+  };
+}

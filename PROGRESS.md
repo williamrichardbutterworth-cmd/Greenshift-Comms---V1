@@ -46,9 +46,9 @@
 
 ---
 
-## Ready to push 🟡 (REPORT ENGINE REBUILD — Phase 1)
+## Shipped to main ✅ — report-engine rebuild + client-view overhaul (`1d16aa1`→`3af7fae`, pushed 2026-06-28)
 
-> **Big rebuild (2026-06-28): document creation re-architected as a data-bound HTML template engine.** The old freeform TipTap editor + AI-assemble flow is GONE; reports are now a chosen TEMPLATE + a CLIENT + a structured data panel + a live A4 preview → PDF/Excel/HTML. User decisions: cost-comparison first, structured-fill only (no freeform editor), remove the old system now. Phase 1 committed (NOT pushed). Phases 2–3 to follow.
+> **Big rebuild (2026-06-28): document creation re-architected as a data-bound HTML template engine.** The old freeform TipTap editor + AI-assemble flow is GONE; reports are now a chosen TEMPLATE + a CLIENT + a structured data panel + a live A4 preview → PDF/Excel/HTML. User decisions: cost-comparison first, structured-fill only (no freeform editor), remove the old system now. **All three phases + the client-view overhaul are PUSHED.**
 
 - **The engine** (`web/src/reports/`): a template = one self-contained module (the user's HTML verbatim with `{{tokens}}` + a field manifest + `seed`/`compute`). `engine.ts` (token render incl. `{{{raw}}}` + `{{#each}}` repeatable rows + £/kWh/date format + `annualCost`/`termYears` maths), `types.ts`, `registry.ts`, `state.ts` (report instance persists on the existing **report_projects** `inputs` jsonb — **no schema change**), `export.ts` (html2canvas→jsPDF PDF, print, HTML), `excel.ts` (**exceljs** branded workbook with LIVE formulas).
 - **Cost Comparison** (`reports/templates/costComparison.{ts,html.ts}`): the user's pixel-perfect Template 01, tokenised (CSS verbatim, market table → `{{#each quotes}}`). **Auto-binds** clientName / annual kWh (parsed from the bill) / contract-end (from the meter) / current supplier from the client record. Computes annual costs, **saving £ + %, N-year value**, and the recommended row.
@@ -69,6 +69,15 @@
   - **LOA page-2 alignment fixed** (`loa.ts`): signature-block values raised ~5pt to sit on the dotted lines (measured baselines 586.8/649.9/698.7); editor matches the PDF fill.
   - **LOA auto-refresh on entry** (`LoaSection.tsx`): the builder re-pulls the client on mount and refreshes profile-sourced fields (`deriveLoaFromClient` now refreshes `source:'profile'` fields + un-derives cleared ones; manual/CH/transcript kept); persists onto the **freshest** inputs (not the stale mount snapshot).
   - **Adversarial review (9-agent workflow): 6 confirmed findings all fixed** — LOA persist stale-inputs rollback (HIGH); report write-back stale-client race + lost-keys-on-failure (MEDIUM×2); contract-end round-trip, LOA in-flight-edit clobber, stale-profile-not-cleared (LOW×3). Gates green (web build, comms root tsc).
+
+---
+
+## Ready to push 🟡
+
+- **Bill Analysis** (new sidebar section, web+server, gates green, browser-verified, adversarially reviewed): a professional bill analyser. Upload a bill → assign a **client** → pick which **meter** (from the client's `inputs.meters`) → a **swarm** of 4 specialised AI extractors runs in PARALLEL (identity / meter / rates / contract) and returns every field with a **verbatim source quote + confidence**. Side-by-side **review**: the bill on the left (Document / Extracted-text tabs, with the active field's source highlighted), the extracted info on the right (each field editable, confidence-badged, with its "from: …" source, apply checkbox). **Approve** → writes the (re-fetched, freshest) client record + the selected/new meter, files the bill in the media bank, ticks the **Bill received** milestone, logs an activity.
+  - Server: `services/billAnalysis.ts` (`analyzeBill` — parallel `Promise.all`, per-pass try/catch, never-throws), `prompts.{BILL_PASSES,billPassPrompt}`, `routes/bill.ts` (`POST /api/bill/analyze`), registered in app.ts. Body limit 8→**12 MB** (a 6 MB file is ~8 MB base64). Web: `components/BillAnalysis.tsx`, `api.bill.analyze`, Sidebar `Tab 'bills'` + NAV "Bill Analysis" (Client work), App route + `wide`.
+  - Verified: swarm read a sample bill → 14 high-confidence fields w/ sources; full UI flow upload→review→approve updated the client (supplier/rates/contract/product), created a meter (MPAN/consumption/contract end), filed the bill, ticked "Bill received".
+  - Review fixes: **fuel-mismatch guard** (an electricity bill can't be written onto a gas meter — never flips an existing meter's fuel); **identity fields** (companyName/businessAddress/postcode) default **un-ticked** (opt-in, so a 3rd-party billing identity can't silently overwrite); **approve re-fetches** the client (no stale-snapshot clobber of inputs/tracker/meters); **orphaned-file cleanup** (failed/abandoned/retried uploads are removed; dedupe on retry); client-side 6 MB pre-check; highlight span anchored in the text. All browser-verified (guard blocks, identity un-ticked, orphan removed on "New analysis").
 
 ---
 
