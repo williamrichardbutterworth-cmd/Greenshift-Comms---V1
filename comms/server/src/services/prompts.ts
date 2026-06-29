@@ -292,6 +292,66 @@ Rules: Use ONLY facts present in the text — never invent a company number, MPA
   };
 }
 
+// ── RFQ (Greenshift Lead Generation Form): qualify a lead from a call transcript ──
+// The internal form handed to the pricing specialist. Extract the basic info AND the
+// answers to the qualification questions from a call transcript / notes (or basic info
+// from a website). Mirror the LOA extractor contract: ground everything, fill blanks.
+export const RFQ_FIELD_KEYS = [
+  'leadGenName', 'companyName', 'contactName', 'contactNumber', 'email', 'businessType', 'numberOfSites',
+  'estimatedConsumption', 'meterProfiled', 'electricMpan', 'currentSupplier', 'contractEndDate', 'callTime',
+  'loaInPlace', 'billsAvailable', 'procureMethod', 'useBroker', 'brokerWho', 'brokerFrequency',
+  'marketKnowledge', 'reviewedContracts', 'reviewedKva', 'decisionMaker', 'awareLooking', 'decisionProcess',
+  'decisionToday', 'timeline', 'worksWell', 'bugBear', 'supplierIssues', 'unexpectedCosts', 'targetBudget',
+  'receivedPrices', 'pricesFromWho', 'expectingPrices', 'fixedVsMarket', 'contractLength', 'signOffToday',
+] as const;
+
+const RFQ_FIELD_GUIDE = `Basic information:
+- companyName, contactName, contactNumber, email, businessType (sector/what they do)
+- numberOfSites, estimatedConsumption (annual kWh), meterProfiled ("HH" or "NHH" if stated)
+- electricMpan, currentSupplier, contractEndDate, callTime (any agreed call time/date)
+- loaInPlace ("Yes"/"No"), billsAvailable ("Yes"/"No" — have they shared/attached bills)
+Qualification answers (capture the customer's actual answer concisely, in their sense):
+- procureMethod: how they normally buy energy (direct, broker, comparison, etc.)
+- useBroker (Yes/No), brokerWho (which broker), brokerFrequency (how often they hear from them)
+- marketKnowledge: their understanding of the energy market
+- reviewedContracts: whether they've reviewed contracts recently
+- reviewedKva: whether they've reviewed kVA capacity / standing charges
+- decisionMaker (who signs off), awareLooking (are they aware you're checking prices)
+- decisionProcess, decisionToday (could they decide on the spot), timeline (if not, when)
+- worksWell, bugBear (biggest frustration), supplierIssues, unexpectedCosts
+- targetBudget, receivedPrices (Yes/No), pricesFromWho, expectingPrices
+- fixedVsMarket (fixed vs market preference), contractLength (term they'd fix for)
+- signOffToday: would they sign off today for a strong offer / do they understand prices move daily`;
+
+export function rfqExtractPrompt(text: string, current?: Record<string, string>, fromWebsite = false) {
+  const known = current && Object.entries(current).filter(([, v]) => (v ?? '').trim()).length
+    ? `\nWhat we already know (do NOT overwrite these unless the source is clearly more accurate; only fill the BLANKS):\n${JSON.stringify(current, null, 2)}`
+    : '';
+  return {
+    system: HOUSE_RULES,
+    prompt: `Fill in a Greenshift Lead Generation Form (an internal energy-broker qualification form) from the ${fromWebsite ? 'company website text' : 'call transcript / notes'} below. ${fromWebsite ? 'A website mostly gives basic information (company, sector, contact); leave qualification answers blank.' : 'Capture the customer’s actual answers to the qualification questions, concisely and faithfully.'}
+${known}
+
+${fromWebsite ? 'Company website text' : 'Transcript / notes'}:
+"""
+${text.slice(0, 16000)}
+"""
+
+Return ONLY JSON in exactly this shape:
+{
+  "fields": {
+${RFQ_FIELD_KEYS.map((k) => `    "${k}": ""`).join(',\n')}
+  },
+  "companySummary": ""   // ${fromWebsite ? '2-3 sentence plain-English overview of what the company does (only from the text)' : 'leave empty'}
+}
+
+Field guidance:
+${RFQ_FIELD_GUIDE}
+
+Rules: Use ONLY what's actually stated. Never invent an MPAN, supplier, consumption or date. Leave any field not covered as "". Summarise long answers in one short sentence. Plain UK English.`,
+  };
+}
+
 // ── Email dialogue: draft the next email in an ongoing client conversation ──
 export interface EmailMsg { direction: 'in' | 'out'; subject?: string; body: string; at?: string }
 

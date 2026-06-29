@@ -1,9 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X, Building2, ArrowLeft, Loader2, FileSpreadsheet } from 'lucide-react';
-import { api, type ClientProfile, type ReportProject } from '../lib/api';
+import { X, Building2, ArrowLeft, Loader2, FileSpreadsheet, Sparkles } from 'lucide-react';
+import { api, type ClientProfile, type ReportProject, type ReportInputs } from '../lib/api';
 import { REPORT_TEMPLATES, getReportTemplate } from '../reports/registry';
 import { newProjectFromState } from '../reports/state';
+import { getField, getMeters } from '../lib/clientProfile';
 import type { ReportTemplate } from '../reports/types';
+
+// Recommend a report type from what we hold about the client — meters/sites drive a cost
+// comparison; otherwise current-position or contract timing point to the best fit.
+function recommendTemplate(client: ClientProfile | null): { id: string; reason: string } | null {
+  if (!client) return null;
+  const inputs = client.inputs as ReportInputs;
+  const meters = getMeters(inputs);
+  if (meters.length) {
+    const sites = new Set(meters.map((m) => (m.siteAddress ?? '').trim().toLowerCase()).filter(Boolean)).size || 1;
+    return { id: 'cost-comparison', reason: `${meters.length} meter${meters.length === 1 ? '' : 's'} across ${sites} site${sites === 1 ? '' : 's'} on file — we’ll build the comparison from them.` };
+  }
+  if (getField(inputs, 'currentSupplier') && getField(inputs, 'consumption')) {
+    return { id: 'cost-comparison', reason: 'Current supplier + usage on file — ready for a like-for-like comparison.' };
+  }
+  const end = getField(inputs, 'contractEnd');
+  if (end) return { id: 'procure-ahead', reason: `Contract end on file (${end}) — a procure-ahead market brief suits the timing.` };
+  return null;
+}
 
 // A request to start a new report. `templateId` preselects the template;
 // `profileId` preselects the client. (seedAngles kept for call-site compatibility.)
@@ -29,6 +48,7 @@ export function NewReportFlow({ request, onCreated, onCancel }: {
   }, [request]);
 
   const client = useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
+  const rec = useMemo(() => recommendTemplate(client), [client]);
 
   if (!request) return null;
 
@@ -53,14 +73,28 @@ export function NewReportFlow({ request, onCreated, onCancel }: {
         </div>
 
         {!tpl ? (
-          <div className="grid sm:grid-cols-2 gap-3">
-            {REPORT_TEMPLATES.map((t) => (
-              <button key={t.id} onClick={() => setTpl(t)} className="card p-4 text-left hover:shadow-md hover:border-brand-green/40 transition">
-                <span className={'grid place-items-center h-9 w-9 rounded-lg bg-brand-tint mb-2 ' + t.accent}><FileSpreadsheet size={18} /></span>
-                <div className="font-medium text-sm">{t.name}</div>
-                <div className="text-xs text-brand-muted mt-1 leading-relaxed">{t.description}</div>
-              </button>
-            ))}
+          <div>
+            {rec && (
+              <div className="mb-3 rounded-lg bg-brand-tint border border-brand-green/30 px-3 py-2 flex items-start gap-2">
+                <Sparkles size={14} className="text-brand-greenDark mt-0.5 shrink-0" />
+                <div className="text-[12px] text-brand-ink leading-snug">
+                  <b>Recommended: {getReportTemplate(rec.id)?.name ?? rec.id}.</b> {rec.reason}
+                </div>
+              </div>
+            )}
+            <div className="grid sm:grid-cols-2 gap-3">
+              {REPORT_TEMPLATES.map((t) => {
+                const isRec = rec?.id === t.id;
+                return (
+                  <button key={t.id} onClick={() => setTpl(t)} className={'card p-4 text-left hover:shadow-md hover:border-brand-green/40 transition relative ' + (isRec ? 'ring-1 ring-brand-green/50 border-brand-green/40' : '')}>
+                    {isRec && <span className="absolute top-2.5 right-2.5 text-[9px] uppercase tracking-wide font-medium text-brand-greenDark bg-brand-tint px-1.5 py-0.5 rounded">Recommended</span>}
+                    <span className={'grid place-items-center h-9 w-9 rounded-lg bg-brand-tint mb-2 ' + t.accent}><FileSpreadsheet size={18} /></span>
+                    <div className="font-medium text-sm">{t.name}</div>
+                    <div className="text-xs text-brand-muted mt-1 leading-relaxed">{t.description}</div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         ) : (
           <div>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, FileText, Paperclip, Plus, FilePlus2,
   Phone, CheckCircle2, Circle, RefreshCw, Trash2, ExternalLink,
-  Wand2, Lightbulb, Copy, Check, UploadCloud, FileSignature,
+  Wand2, Lightbulb, Copy, Check, UploadCloud, FileSignature, ClipboardList,
 } from 'lucide-react';
 import {
   api, type ClientProfile, type ClientStage, type ClientFile, type ActivityType,
@@ -22,7 +22,7 @@ const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
 // deal cockpit: the next step, the talk-track call points and a live-call log up top;
 // the full client record beside the LOA tracker; the milestone tracker + media below.
 export function ClientHub({
-  clientId, onBack, onStartDocument, onDraftFromAngles, onOpenProject, onOpenLoa,
+  clientId, onBack, onStartDocument, onDraftFromAngles, onOpenProject, onOpenLoa, onOpenRfq,
 }: {
   clientId: string;
   onBack: () => void;
@@ -30,6 +30,7 @@ export function ClientHub({
   onDraftFromAngles: (client: ClientProfile, angles: string[]) => void;
   onOpenProject: (projectId: string) => void;
   onOpenLoa: (clientId: string) => void;
+  onOpenRfq: (clientId: string) => void;
 }) {
   const [client, setClient] = useState<ClientProfile | null>(null);
   const [files, setFiles] = useState<ClientFile[]>([]);
@@ -346,7 +347,10 @@ export function ClientHub({
                 <button className="btn-primary w-full justify-center !py-1.5 text-sm mt-1" onClick={() => onOpenLoa(client.id)}>
                   <FileSignature size={14} /> Open LOA editor
                 </button>
-                <p className="text-[11px] text-brand-muted mt-1.5">Fields auto-fill from this record; polish &amp; export the letter in the editor.</p>
+                <button className="btn-ghost w-full justify-center !py-1.5 text-sm mt-2" onClick={() => onOpenRfq(client.id)}>
+                  <ClipboardList size={14} /> Open RFQ form
+                </button>
+                <p className="text-[11px] text-brand-muted mt-1.5">Both auto-fill from this record; polish &amp; export in the editor.</p>
               </section>
             );
           })()}

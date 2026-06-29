@@ -4,15 +4,14 @@ import {
 } from 'lucide-react';
 import { api, type ReportProject, type ReportInputs, type ClientProfile } from '../../lib/api';
 import { getReportTemplate } from '../../reports/registry';
-import { renderTemplate, annualCost, parseNum, money0 } from '../../reports/engine';
+import { renderTemplate } from '../../reports/engine';
 import { stateFromProject, patchFromState } from '../../reports/state';
 import { loadProcureData } from '../../reports/templates/procureAhead';
-import type { ReportState, CostData, CurrentPosition, TemplateField, ProcureData, ReportTemplate } from '../../reports/types';
+import type { ReportState, CostData, TemplateField, ProcureData, ReportTemplate } from '../../reports/types';
 import { downloadHtml, download, slug } from '../../reports/export';
-import { QuotesGrid } from './QuotesGrid';
+import { normalizeCost } from '../../reports/templates/costComparison';
+import { CostComparisonEditor } from './CostComparisonEditor';
 import { ReportEditor, type ReportEditorHandle } from './ReportEditor';
-
-const EMPTY_CURRENT: CurrentPosition = { supplier: '', product: '', unitRate: '', standing: '', termStatus: '' };
 
 export function ReportStudio({ project, onProjectSaved }: {
   project: ReportProject;
@@ -36,9 +35,9 @@ export function ReportStudio({ project, onProjectSaved }: {
   const pendingClient = useRef<Record<string, string>>({});
 
   // ── derived ──
-  const cost: CostData = state.data.cost ?? { current: { ...EMPTY_CURRENT }, quotes: [] };
-  const kwh = parseNum(state.values.annualKwh);
-  const currentCost = annualCost(parseNum(cost.current.unitRate), parseNum(cost.current.standing), kwh);
+  // Memoised so a legacy report's migrated meter id() is stable across re-renders (else
+  // the meter rows remount and drop input focus mid-edit).
+  const cost: CostData = useMemo(() => normalizeCost(state.data.cost, state.values.annualKwh), [state.data.cost, state.values.annualKwh]);
   const computed = useMemo(() => template?.compute(state, null) ?? null, [template, state]);
   const html = useMemo(
     () => (template && computed ? renderTemplate(template.html, computed.tokens, computed.lists) : ''),
@@ -96,12 +95,7 @@ export function ReportStudio({ project, onProjectSaved }: {
   };
   const setValue = (k: string, v: string) => { queueBound(k, v); mutate((s) => ({ ...s, values: { ...s.values, [k]: v } })); };
   const setTitle = (v: string) => mutate((s) => ({ ...s, title: v }));
-  const setCurrent = (patch: Partial<CurrentPosition>) => {
-    Object.entries(patch).forEach(([sub, val]) => queueBound(`current.${sub}`, val as string));
-    mutate((s) => ({ ...s, data: { ...s.data, cost: { current: { ...EMPTY_CURRENT, ...s.data.cost?.current, ...patch }, quotes: s.data.cost?.quotes ?? [] } } }));
-  };
-  const setQuotes = (quotes: CostData['quotes']) =>
-    mutate((s) => ({ ...s, data: { ...s.data, cost: { current: s.data.cost?.current ?? { ...EMPTY_CURRENT }, quotes } } }));
+  const setCost = (next: CostData) => mutate((s) => ({ ...s, data: { ...s.data, cost: next } }));
   const setProcure = (procure: ProcureData) => mutate((s) => ({ ...s, data: { ...s.data, procure } }));
 
   // Procure-ahead: pull the live market figures + forward-curve read on first open.
@@ -256,30 +250,7 @@ export function ReportStudio({ project, onProjectSaved }: {
         <Group title="Client">{fieldsFor('Client').map((f) => <Field key={f.key} f={f} value={state.values[f.key] ?? ''} onChange={(v) => setValue(f.key, v)} />)}</Group>
 
         {template.kind === 'cost-comparison' && (
-          <>
-            <section className="card p-4">
-              <div className="flex items-center justify-between mb-2.5">
-                <h3 className="label">Your current position</h3>
-                <span className="text-[9px] uppercase tracking-wide text-brand-greenDark/70 bg-brand-tint px-1 rounded">synced to client record</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2.5">
-                <Inline label="Supplier" value={cost.current.supplier} onChange={(v) => setCurrent({ supplier: v })} placeholder="British Gas" />
-                <Inline label="Product" value={cost.current.product} onChange={(v) => setCurrent({ product: v })} placeholder="Out-of-contract / deemed" />
-                <Inline label="Unit rate (p/kWh)" value={cost.current.unitRate} onChange={(v) => setCurrent({ unitRate: v })} placeholder="34.50" mono />
-                <Inline label="Standing (p/day)" value={cost.current.standing} onChange={(v) => setCurrent({ standing: v })} placeholder="95.00" mono />
-                <Inline label="Contract status" value={cost.current.termStatus} onChange={(v) => setCurrent({ termStatus: v })} placeholder="Expires 31 Aug" />
-                <div>
-                  <label className="text-[11px] text-brand-muted block mb-0.5">Annual cost</label>
-                  <div className="input !py-1.5 text-sm font-mono bg-brand-tint/40">{Number.isFinite(currentCost) ? `£${money0(currentCost)}` : '—'}</div>
-                </div>
-              </div>
-            </section>
-
-            <section className="card p-4">
-              <h3 className="label mb-2.5">Supplier quotes</h3>
-              <QuotesGrid quotes={cost.quotes} annualKwh={kwh} currentCost={currentCost} onChange={setQuotes} />
-            </section>
-          </>
+          <CostComparisonEditor cost={cost} onChange={setCost} />
         )}
 
         {template.kind === 'procure-ahead' && (
@@ -364,23 +335,15 @@ function blankState(project: ReportProject): ReportState {
 // own value untouched (no data loss when the client record hasn't been filled yet).
 function applyBound(s: ReportState, template: ReportTemplate, inputs: Record<string, unknown>): ReportState {
   let values = s.values;
-  let cost = s.data.cost;
   let changed = false;
   for (const b of template.boundFields ?? []) {
     const live = b.read(inputs);
     if (!live || !live.trim()) continue;
-    if (b.key.startsWith('current.')) {
-      const sub = b.key.slice('current.'.length) as keyof CurrentPosition;
-      if ((cost?.current?.[sub] ?? '') === live) continue;
-      cost = { current: { ...EMPTY_CURRENT, ...(cost?.current ?? {}), [sub]: live }, quotes: cost?.quotes ?? [] };
-      changed = true;
-    } else {
-      if ((values[b.key] ?? '') === live) continue;
-      values = { ...values, [b.key]: live };
-      changed = true;
-    }
+    if ((values[b.key] ?? '') === live) continue;
+    values = { ...values, [b.key]: live };
+    changed = true;
   }
-  return changed ? { ...s, values, data: { ...s.data, cost } } : s;
+  return changed ? { ...s, values } : s;
 }
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
@@ -439,15 +402,6 @@ function MarketCards({ procure, loading }: { procure?: ProcureData; loading: boo
         {procure.signal && <span className={'px-1.5 py-0.5 rounded font-medium capitalize ' + sigTone}>Forward curve: {procure.signal}</span>}
         <span className="text-brand-muted ml-auto">{procure.asOf}</span>
       </div>
-    </div>
-  );
-}
-
-function Inline({ label, value, onChange, placeholder, mono }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean }) {
-  return (
-    <div>
-      <label className="text-[11px] text-brand-muted block mb-0.5">{label}</label>
-      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className={'input !py-1.5 text-sm ' + (mono ? 'font-mono' : '')} />
     </div>
   );
 }

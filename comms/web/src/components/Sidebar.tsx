@@ -1,7 +1,7 @@
-import { LayoutDashboard, Newspaper, Users, Sparkles, Lightbulb, FileText, FileSignature, ReceiptText, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, Newspaper, Users, Sparkles, Lightbulb, FileText, FileSignature, ClipboardList, ReceiptText, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 // Section ids are STABLE (referenced widely as `tab`); only labels/icons change.
-export type Tab = 'dashboard' | 'brief' | 'news' | 'report' | 'bills' | 'documents' | 'loa' | 'ideas';
+export type Tab = 'dashboard' | 'brief' | 'news' | 'report' | 'bills' | 'documents' | 'loa' | 'rfq' | 'ideas';
 
 export const NAV: { id: Tab; label: string; icon: typeof LayoutDashboard; group?: 'intel' | 'work' }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'intel' },
@@ -11,6 +11,7 @@ export const NAV: { id: Tab; label: string; icon: typeof LayoutDashboard; group?
   { id: 'bills', label: 'Bill Analysis', icon: ReceiptText, group: 'work' },
   { id: 'documents', label: 'Documents', icon: FileText, group: 'work' },
   { id: 'loa', label: 'Letters of Authority', icon: FileSignature, group: 'work' },
+  { id: 'rfq', label: 'RFQ', icon: ClipboardList, group: 'work' },
   { id: 'ideas', label: 'Admin Ideas', icon: Lightbulb, group: 'work' },
 ];
 

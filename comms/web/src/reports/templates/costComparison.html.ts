@@ -103,6 +103,19 @@ export const COST_COMPARISON_HTML = `<!doctype html>
 
   .current-table tbody td{border-bottom:1px solid var(--line);}
 
+  /* ---------- multi-meter comparison tables ---------- */
+  .cc-table{font-size:10.5px;table-layout:fixed;}
+  .cc-table thead th{padding:0 8px 7px;font-size:8.5px;}
+  .cc-table tbody td{padding:8px;font-size:10.5px;}
+  .cc-table td.l .product{font-size:9px;}
+  .cc-table .supplier{font-weight:600;}
+  .cc-total td{border-top:1.5px solid var(--ink);border-bottom:0;font-weight:600;padding-top:9px;}
+  .cc-total td.l{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-60);}
+  .cc-total td.num{font-size:13px;}
+  .rec-table thead th{color:var(--green-dark);border-bottom-color:var(--green);}
+  .rec-table tbody td{background:var(--green-tint);}
+  .rec-table .cc-total td{border-top-color:var(--green);color:var(--green-dark);}
+
   /* ---------- recommendation ---------- */
   .reco{border:1px solid var(--line-strong);border-left:3px solid var(--green);border-radius:8px;padding:22px 24px;background:#fcfdfb;}
   .reco h3{margin:0 0 8px;font-size:15px;font-weight:600;}
@@ -165,9 +178,9 @@ export const COST_COMPARISON_HTML = `<!doctype html>
 
   <div class="strip">
     <div><div class="k">Prepared for</div><div class="v">{{clientName}}</div></div>
-    <div><div class="k">Annual consumption</div><div class="v mono">{{annualKwhLabel}}</div></div>
+    <div><div class="k">Total consumption</div><div class="v mono">{{totalConsumptionLabel}}</div></div>
+    <div><div class="k">Meters &middot; sites</div><div class="v mono">{{meterCount}} &middot; {{siteCount}}</div></div>
     <div><div class="k">Current contract ends</div><div class="v mono">{{contractEndDate}}</div></div>
-    <div><div class="k">Consultant</div><div class="v">{{consultantName}}</div></div>
   </div>
 
   <section>
@@ -186,55 +199,7 @@ export const COST_COMPARISON_HTML = `<!doctype html>
     </div>
   </section>
 
-  <section>
-    <div class="sec-head"><span class="eyebrow">Your current position</span><span class="hr"></span></div>
-    <table class="current-table">
-      <thead>
-        <tr>
-          <th class="l">Supplier &amp; product</th>
-          <th>Unit rate</th>
-          <th>Standing charge</th>
-          <th>Contract status</th>
-          <th>Annual cost</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td class="l"><span class="supplier">{{currentSupplier}}</span><br><span class="product">{{currentProduct}}</span></td>
-          <td class="num">{{currentUnitRate}} <span style="color:var(--ink-40)">p</span></td>
-          <td class="num">{{currentStanding}} <span style="color:var(--ink-40)">p/day</span></td>
-          <td class="num" style="text-align:right;color:var(--ink-60)">{{currentTermStatus}}</td>
-          <td class="num" style="font-weight:600">&pound;{{currentAnnualCost}}</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
-
-  <section>
-    <div class="sec-head"><span class="eyebrow">The market — quotes returned</span><span class="hr"></span></div>
-    <table>
-      <thead>
-        <tr>
-          <th class="l">Supplier &amp; term</th>
-          <th>Unit rate<br><span style="font-weight:400;text-transform:none;letter-spacing:0">p/kWh</span></th>
-          <th>Standing<br><span style="font-weight:400;text-transform:none;letter-spacing:0">p/day</span></th>
-          <th>Annual cost</th>
-          <th>vs. current</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{#each quotes}}
-        <tr class="{{rowClass}}">
-          <td class="l"><span class="supplier">{{supplier}}</span>{{{recPill}}}<br><span class="product">{{term}}</span></td>
-          <td class="num">{{unitRate}}</td>
-          <td class="num">{{standing}}</td>
-          <td class="num" style="font-weight:600">&pound;{{annualCost}}</td>
-          <td class="num {{deltaClass}}">{{{deltaText}}}</td>
-        </tr>
-        {{/each}}
-      </tbody>
-    </table>
-  </section>
+  {{{comparisonTables}}}
 
   <section>
     <div class="sec-head"><span class="eyebrow">Our recommendation</span><span class="hr"></span></div>
@@ -253,7 +218,7 @@ export const COST_COMPARISON_HTML = `<!doctype html>
   <section>
     <div class="sec-head"><span class="eyebrow">Basis &amp; assumptions</span><span class="hr"></span></div>
     <ul class="notes">
-      <li>Prices based on annual consumption of {{annualKwhLabel}} taken from your latest bill and meter data. Actual costs vary with usage.</li>
+      <li>Prices based on total annual consumption of {{totalConsumptionLabel}} across {{meterCount}} meter(s), taken from your latest bills and meter data. Actual costs vary with usage.</li>
       <li>All rates and costs shown {{taxBasis}}</li>
       <li>Quotes are indicative and subject to supplier credit check and acceptance. Prices held until {{validUntil}}.</li>
       <li>Saving is calculated against your projected out-of-contract cost; saving against a renewal offer from your existing supplier may differ.</li>

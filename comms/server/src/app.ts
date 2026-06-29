@@ -11,6 +11,7 @@ import { fileRoutes } from './routes/files';
 import { ideasRoutes } from './routes/ideas';
 import { forwardCurveRoutes } from './routes/forwardCurve';
 import { loaRoutes } from './routes/loa';
+import { rfqRoutes } from './routes/rfq';
 import { emailRoutes } from './routes/email';
 import { billRoutes } from './routes/bill';
 
@@ -50,6 +51,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(ideasRoutes);
   await app.register(forwardCurveRoutes);
   await app.register(loaRoutes);
+  await app.register(rfqRoutes);
   await app.register(emailRoutes);
   await app.register(billRoutes);
 

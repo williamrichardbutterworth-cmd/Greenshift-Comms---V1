@@ -6,7 +6,7 @@
 //   {{#each name}}…{{/each}} → repeat the inner block for each row in lists[name]
 // Inside an each-block, row keys win over top-level tokens.
 
-const escapeHtml = (s: string): string =>
+export const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function substitute(tpl: string, scope: Record<string, string>): string {
@@ -81,4 +81,14 @@ export function annualCost(unitRateP: number, standingPDay: number, annualKwh: n
   const energy = (unitRateP / 100) * annualKwh;
   const standing = (standingPDay / 100) * 365;
   return energy + standing;
+}
+
+// Annual cost (£) for a day/night (Economy-7) meter — the canonical comparison formula,
+// matching the Excel: (dayKwh·dayRate + nightKwh·nightRate + standing·365) / 100.
+// NaN rates/consumption are treated as 0 so a half-filled row still totals sensibly.
+export function meterAnnualCost(
+  dayKwh: number, dayRateP: number, nightKwh: number, nightRateP: number, standingPDay: number,
+): number {
+  const z = (n: number) => (Number.isFinite(n) ? n : 0);
+  return (z(dayKwh) * z(dayRateP) + z(nightKwh) * z(nightRateP) + z(standingPDay) * 365) / 100;
 }

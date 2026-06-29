@@ -6,6 +6,7 @@ import { NewsFeed } from './components/NewsFeed';
 import { IdeasBoard } from './components/IdeasBoard';
 import { ClientsHome } from './components/ClientsHome';
 import { LoaSection } from './components/LoaSection';
+import { RfqSection } from './components/RfqSection';
 import { BillAnalysis } from './components/BillAnalysis';
 import { WorkspaceProvider, useWorkspace } from './workspace/WorkspaceContext';
 import { usePersisted } from './lib/usePersisted';
@@ -19,9 +20,11 @@ const DocumentsSection = lazy(() =>
 export default function App() {
   const [section, setSection] = usePersisted<Tab>('comms.ui.section', 'dashboard');
   const [collapsed, setCollapsed] = usePersisted<boolean>('comms.ui.sidebarCollapsed', false);
-  // Deep-link target for opening a specific client's LOA editor from their hub.
+  // Deep-link target for opening a specific client's LOA / RFQ editor from their hub.
   const [loaClientId, setLoaClientId] = useState<string | null>(null);
   const openLoa = (id: string) => { setLoaClientId(id); setSection('loa'); };
+  const [rfqClientId, setRfqClientId] = useState<string | null>(null);
+  const openRfq = (id: string) => { setRfqClientId(id); setSection('rfq'); };
 
   return (
     <WorkspaceProvider onNavigateToDocuments={() => setSection('documents')}>
@@ -29,12 +32,13 @@ export default function App() {
         section={section} setSection={setSection}
         collapsed={collapsed} onToggleCollapse={() => setCollapsed((v) => !v)}
         loaClientId={loaClientId} onOpenLoa={openLoa} onLoaConsumed={() => setLoaClientId(null)}
+        rfqClientId={rfqClientId} onOpenRfq={openRfq} onRfqConsumed={() => setRfqClientId(null)}
       />
     </WorkspaceProvider>
   );
 }
 
-function Shell({ section, setSection, collapsed, onToggleCollapse, loaClientId, onOpenLoa, onLoaConsumed }: {
+function Shell({ section, setSection, collapsed, onToggleCollapse, loaClientId, onOpenLoa, onLoaConsumed, rfqClientId, onOpenRfq, onRfqConsumed }: {
   section: Tab;
   setSection: (t: Tab) => void;
   collapsed: boolean;
@@ -42,6 +46,9 @@ function Shell({ section, setSection, collapsed, onToggleCollapse, loaClientId, 
   loaClientId: string | null;
   onOpenLoa: (id: string) => void;
   onLoaConsumed: () => void;
+  rfqClientId: string | null;
+  onOpenRfq: (id: string) => void;
+  onRfqConsumed: () => void;
 }) {
   const ws = useWorkspace();
   // The Documents studio, the wider Clients hub, and the bill analyser (side-by-side)
@@ -61,9 +68,10 @@ function Shell({ section, setSection, collapsed, onToggleCollapse, loaClientId, 
           {section === 'dashboard' && <Dashboard />}
           {section === 'brief' && <DailyReview />}
           {section === 'news' && <NewsFeed />}
-          {section === 'report' && <ClientsHome onOpenLoa={onOpenLoa} />}
+          {section === 'report' && <ClientsHome onOpenLoa={onOpenLoa} onOpenRfq={onOpenRfq} />}
           {section === 'bills' && <BillAnalysis />}
           {section === 'loa' && <LoaSection initialClientId={loaClientId} onConsumed={onLoaConsumed} />}
+          {section === 'rfq' && <RfqSection initialClientId={rfqClientId} onConsumed={onRfqConsumed} />}
           {section === 'documents' && (
             <Suspense fallback={<div className="card p-10 text-center text-brand-muted">Loading workspace…</div>}>
               <DocumentsSection />

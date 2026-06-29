@@ -383,6 +383,13 @@ export interface LoaExtractResult {
   error?: string;
   url?: string;
 }
+export interface RfqExtractResult {
+  fields: Record<string, string>;
+  companySummary: string;
+  provider: string;
+  error?: string;
+  url?: string;
+}
 export interface ChCompanySummary {
   companyNumber: string; title: string; status: string; type: string; addressSnippet: string; incorporatedOn: string;
 }
@@ -502,6 +509,12 @@ export const api = {
     chCompany: (number: string) => j<ChCompanyResult>(`/api/companies-house/company/${encodeURIComponent(number)}`),
     scrape: (url: string, current?: Record<string, string>) => j<LoaExtractResult>('/api/loa/scrape', postJson({ url, current })),
     extract: (text: string, current?: Record<string, string>) => j<LoaExtractResult>('/api/loa/extract', postJson({ text, current })),
+  },
+
+  // RFQ (Lead Generation Form) — qualify a lead from a call transcript / website.
+  rfq: {
+    scrape: (url: string, current?: Record<string, string>) => j<RfqExtractResult>('/api/rfq/scrape', postJson({ url, current })),
+    extract: (text: string, current?: Record<string, string>) => j<RfqExtractResult>('/api/rfq/extract', postJson({ text, current })),
   },
 
   // Email dialogue — draft the next email/response in a client thread.

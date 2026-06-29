@@ -27,25 +27,61 @@ export interface TemplateField {
 
 export type ReportKind = 'cost-comparison' | 'procure-ahead';
 
-// ── Cost-comparison datasets ──
+// ── Cost-comparison datasets (multi-meter, day/night) ──
+// A comparison is built around the client's actual METERS. Each meter carries its own
+// current supplier + day/night consumption & rates + standing charge (single-rate meters
+// simply leave the night band blank). One or more PROPOSED suppliers then quote new rates
+// against the SAME consumption, so every annual cost is like-for-like — mirroring the
+// branded Excel (a "current" block + a green proposed block per supplier).
+export interface MeterLine {
+  id: string;
+  meterNumber: string;        // MPAN (electric) / MPRN (gas)
+  fuel: 'electric' | 'gas';
+  site: string;               // site address / label
+  currentSupplier: string;
+  dayConsumption: string;     // annual kWh (single-rate meters put all usage here)
+  dayRate: string;            // p/kWh
+  nightConsumption: string;   // annual kWh ('' / 0 = single-rate, no night band)
+  nightRate: string;          // p/kWh
+  standing: string;           // p/day
+}
+// One proposed supplier's quoted rates for a single meter — the meter's consumption is
+// reused, only the rates differ (like-for-like).
+export interface SupplierLine {
+  dayRate: string;            // p/kWh
+  nightRate: string;          // p/kWh
+  standing: string;           // p/day
+}
+export interface ProposedSupplier {
+  id: string;
+  name: string;
+  term: string;               // optional contract length, e.g. "36-month fixed"
+  lines: Record<string, SupplierLine>; // keyed by MeterLine.id
+  recommended?: boolean;      // exactly one supplier is the recommendation (else cheapest)
+}
+export interface CostData {
+  meters: MeterLine[];
+  proposed: ProposedSupplier[];
+  // Legacy single-position fields — kept optional so reports saved under the old
+  // (single-rate, single-supplier) shape still parse and migrate forward.
+  current?: CurrentPosition;
+  quotes?: QuoteRow[];
+}
+// Legacy shapes (retained for migration of older saved reports).
 export interface QuoteRow {
   id: string;
   supplier: string;
-  term: string;          // e.g. "36-month fixed"
-  unitRate: string;      // p/kWh (kept as a string for grid editing)
-  standing: string;      // p/day
-  recommended?: boolean; // exactly one row is the recommendation
+  term: string;
+  unitRate: string;
+  standing: string;
+  recommended?: boolean;
 }
 export interface CurrentPosition {
   supplier: string;
-  product: string;       // e.g. "Out-of-contract / deemed"
-  unitRate: string;      // p/kWh
-  standing: string;      // p/day
-  termStatus: string;    // e.g. "Expires 31 Aug"
-}
-export interface CostData {
-  current: CurrentPosition;
-  quotes: QuoteRow[];
+  product: string;
+  unitRate: string;
+  standing: string;
+  termStatus: string;
 }
 
 // ── Procure-ahead datasets (live market figures + forward-curve read) ──
@@ -101,7 +137,7 @@ export interface ComputeResult {
 // of truth). On open, `read` derives the live value from the client; on edit, `write`
 // produces the client-inputs patch so the change propagates everywhere.
 export interface BoundField {
-  key: string;          // report field key; 'current.<sub>' targets the cost current-position editor
+  key: string;          // report field key bound to a client-record field
   read: (inputs: Record<string, unknown>) => string;
   write: (value: string) => Record<string, string>;
   /** Derive from the client on open, but never write back (e.g. a value parsed/
