@@ -390,6 +390,8 @@ export interface RfqExtractResult {
   error?: string;
   url?: string;
 }
+export interface RfqGameplanItem { key: string; cue: string; ask: string }
+export interface RfqGameplanResult { items: RfqGameplanItem[]; provider: string; error?: string }
 export interface ChCompanySummary {
   companyNumber: string; title: string; status: string; type: string; addressSnippet: string; incorporatedOn: string;
 }
@@ -511,10 +513,11 @@ export const api = {
     extract: (text: string, current?: Record<string, string>) => j<LoaExtractResult>('/api/loa/extract', postJson({ text, current })),
   },
 
-  // RFQ (Lead Generation Form) — qualify a lead from a call transcript / website.
+  // RFQ (Lead Generation Form) — qualify a lead from a call transcript / website + call prep.
   rfq: {
     scrape: (url: string, current?: Record<string, string>) => j<RfqExtractResult>('/api/rfq/scrape', postJson({ url, current })),
     extract: (text: string, current?: Record<string, string>) => j<RfqExtractResult>('/api/rfq/extract', postJson({ text, current })),
+    gameplan: (context: string, questions: { key: string; question: string }[]) => j<RfqGameplanResult>('/api/rfq/gameplan', postJson({ context, questions })),
   },
 
   // Email dialogue — draft the next email/response in a client thread.

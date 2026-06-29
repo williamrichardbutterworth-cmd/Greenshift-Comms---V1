@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { extractRfqFields, scrapeRfqWebsite } from '../services/rfqIntel';
+import { extractRfqFields, scrapeRfqWebsite, rfqGameplan } from '../services/rfqIntel';
 
 // RFQ (Lead Generation Form) intelligence: AI extraction of qualification answers from a
 // call transcript / notes, and basic info from a company website. Degrades gracefully
@@ -15,5 +15,11 @@ export async function rfqRoutes(app: FastifyInstance): Promise<void> {
     const body = (req.body ?? {}) as { text?: string; current?: Record<string, string> };
     if (!body.text?.trim()) { reply.code(400); return { error: 'Some text to read is required.' }; }
     return extractRfqFields(body.text, body.current, false);
+  });
+
+  // Per-question call-prep cues, grounded in everything we already know about the client.
+  app.post('/api/rfq/gameplan', async (req) => {
+    const body = (req.body ?? {}) as { context?: string; questions?: { key: string; question: string }[] };
+    return rfqGameplan(body.context ?? '', Array.isArray(body.questions) ? body.questions.slice(0, 60) : []);
   });
 }

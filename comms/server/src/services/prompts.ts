@@ -352,6 +352,32 @@ Rules: Use ONLY what's actually stated. Never invent an MPAN, supplier, consumpt
   };
 }
 
+// ── RFQ call game plan: per-question cues + how to ask, grounded in what we already know ──
+// Turns the qualification call into an assisted flow: for each remaining question, surface the
+// most relevant thing the client has ALREADY told us so the agent can reference it (showing they
+// listened), and suggest a natural way to ask that weaves the cue in.
+export function rfqGameplanPrompt(context: string, questions: { key: string; question: string }[]) {
+  return {
+    system: HOUSE_RULES,
+    prompt: `You are prepping a Green Shift lead-gen agent for an RFQ qualification call with a business energy customer. Below is EVERYTHING we already know about this client — their record, past conversations, and the talking points we've gathered. For each question we still need to answer on the call, return:
+- "cue": the single most relevant thing we ALREADY know that relates to this question — a specific fact or a short paraphrase of something they told us — so the agent can reference it and show we've been listening. If we genuinely have nothing relevant, use "".
+- "ask": a natural, warm way to ask the question on the call that weaves the cue in when there is one (so it feels like a continuation of the relationship, not an interrogation). If there's no cue, just give a clean, conversational version of the question.
+
+Ground every cue ONLY in the context below — NEVER invent a fact, name, figure or quote. Keep "cue" and "ask" to one sentence each. UK English.
+
+What we already know about this client:
+"""
+${context.slice(0, 9000)}
+"""
+
+Questions still to answer (return exactly one object per key, in the same order):
+${questions.map((q) => `- ${q.key}: ${q.question}`).join('\n')}
+
+Return ONLY JSON in this shape:
+{ "items": [ ${questions.slice(0, 1).map((q) => `{ "key": "${q.key}", "cue": "", "ask": "" }`).join('')} , … ] }`,
+  };
+}
+
 // ── Email dialogue: draft the next email in an ongoing client conversation ──
 export interface EmailMsg { direction: 'in' | 'out'; subject?: string; body: string; at?: string }
 

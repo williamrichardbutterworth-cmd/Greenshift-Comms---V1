@@ -1,4 +1,4 @@
-import type { ReportInputs, ClientMeter } from './api';
+import type { ReportInputs, ClientMeter, ClientActivity } from './api';
 
 // ── RFQ (Greenshift Lead Generation Form) — a BOUND VIEW over the client record ──
 // The RFQ is the end-result the whole app feeds. So it isn't a parallel copy: each field
@@ -190,6 +190,38 @@ export function applyRfqExtract(inputs: ReportInputs, fields: Record<string, str
     filled++;
   }
   return { inputs: next, filled };
+}
+
+// Everything we already know about a client, assembled for the call-prep AI — the record
+// facts + the talking points gathered + the conversation history (notes/transcripts/emails).
+// This is what the game plan cross-references, so the RFQ draws on the whole profile.
+export function buildRfqContext(inputs: ReportInputs, activities: ClientActivity[]): string {
+  const blocks: string[] = [];
+  const recordBits = [
+    field(inputs, 'companyName') && `Company: ${field(inputs, 'companyName')}`,
+    field(inputs, 'industry') && `Sector: ${field(inputs, 'industry')}`,
+    field(inputs, 'currentSupplier') && `Current supplier: ${field(inputs, 'currentSupplier')}`,
+    field(inputs, 'contractEnd') && `Contract end on file: ${field(inputs, 'contractEnd')}`,
+    field(inputs, 'consumption') && `Annual consumption: ${field(inputs, 'consumption')}`,
+    metersOf(inputs).length && `${metersOf(inputs).length} meter(s) on file`,
+    field(inputs, 'companySummary') && `About them: ${field(inputs, 'companySummary')}`,
+    field(inputs, 'agentNotes') && `Agent notes: ${field(inputs, 'agentNotes')}`,
+  ].filter(Boolean);
+  if (recordBits.length) blocks.push(`CLIENT RECORD:\n${recordBits.join('\n')}`);
+
+  const angles: string[] = [];
+  for (const a of activities) for (const ang of (Array.isArray(a.meta?.angles) ? (a.meta!.angles as string[]) : [])) { const s = String(ang).trim(); if (s && !angles.includes(s)) angles.push(s); }
+  if (angles.length) blocks.push(`TALKING POINTS GATHERED:\n${angles.map((a) => `- ${a}`).join('\n')}`);
+
+  const convo = activities
+    .filter((a) => ['note', 'transcript', 'email-sent', 'email-received'].includes(a.type))
+    .slice(0, 24)
+    // Cap each entry's detail so every conversation is at least partly represented in the
+    // context (rather than the blunt tail-slice dropping the most recent ones mid-sentence).
+    .map((a) => `[${a.type}] ${a.title}${a.detail ? `: ${a.detail.slice(0, 600)}` : ''}`);
+  if (convo.length) blocks.push(`CONVERSATION HISTORY (newest first):\n${convo.join('\n')}`);
+
+  return blocks.join('\n\n').slice(0, 9000);
 }
 
 export function rfqFilename(company: string): string {

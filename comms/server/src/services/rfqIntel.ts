@@ -1,6 +1,6 @@
 import { aiConfigured } from '../config';
 import { getAI } from '../providers/ai';
-import { rfqExtractPrompt, RFQ_FIELD_KEYS } from './prompts';
+import { rfqExtractPrompt, rfqGameplanPrompt, RFQ_FIELD_KEYS } from './prompts';
 import { fetchWebsiteText } from './loaIntel';
 
 // Harvest Greenshift Lead-Generation-Form (RFQ) answers from a call transcript / notes,
@@ -41,4 +41,25 @@ export async function scrapeRfqWebsite(url: string, current?: Record<string, str
   if (!text) return { ...EMPTY, url: target, provider: 'error', error: 'No readable content found on that page.' };
   const out = await extractRfqFields(text, current, true);
   return { ...out, url: target };
+}
+
+// ── Call game plan: per-question cues + suggested asks, grounded in the client context ──
+export interface RfqGameplanItem { key: string; cue: string; ask: string }
+export interface RfqGameplan { items: RfqGameplanItem[]; provider: string; error?: string }
+
+export async function rfqGameplan(context: string, questions: { key: string; question: string }[]): Promise<RfqGameplan> {
+  if (!questions.length) return { items: [], provider: 'none' };
+  if (!aiConfigured()) return { items: [], provider: 'none', error: 'Automatic call prep isn’t configured.' };
+  try {
+    const ai = getAI();
+    const { system, prompt } = rfqGameplanPrompt(context, questions);
+    const raw = await ai.generateJSON<{ items?: Array<{ key?: unknown; cue?: unknown; ask?: unknown }> }>({ system, prompt, maxTokens: 3000 });
+    const valid = new Set(questions.map((q) => q.key));
+    const items = (Array.isArray(raw?.items) ? raw.items : [])
+      .map((i) => ({ key: str(i?.key), cue: str(i?.cue).slice(0, 280), ask: str(i?.ask).slice(0, 320) }))
+      .filter((i) => valid.has(i.key));
+    return { items, provider: ai.name };
+  } catch (e) {
+    return { items: [], provider: 'error', error: (e as Error).message };
+  }
 }

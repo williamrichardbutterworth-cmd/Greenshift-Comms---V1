@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, Download, ClipboardList, Globe, MessageSquareText, Check, Save,
-  FileSignature, ReceiptText, CheckCircle2, Circle, PhoneCall,
+  FileSignature, ReceiptText, CheckCircle2, Circle, PhoneCall, Lightbulb,
 } from 'lucide-react';
-import { api, type ClientProfile, type ReportInputs, type ClientFile } from '../lib/api';
+import { api, type ClientProfile, type ReportInputs, type ClientFile, type ClientActivity } from '../lib/api';
 import {
   RFQ_SECTIONS, RFQ_FIELDS, RFQ_SOURCE_LABEL, rfqFieldView, rfqAllValues, rfqCompleteness,
-  setRfqField, applyRfqExtract, hasLoaDrafted, buildRfqDocx, rfqFilename, rfqIsMultiline,
+  setRfqField, applyRfqExtract, hasLoaDrafted, buildRfqContext, buildRfqDocx, rfqFilename, rfqIsMultiline,
   type RfqSource,
 } from '../lib/rfq';
 
@@ -69,16 +69,20 @@ export function RfqSection({ initialClientId, onConsumed }: { initialClientId?: 
 function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => void }) {
   const [inputs, setInputs] = useState<ReportInputs>(() => client.inputs as ReportInputs);
   const [files, setFiles] = useState<ClientFile[]>([]);
-  const [busy, setBusy] = useState<null | 'web' | 'notes' | 'gen' | 'save'>(null);
+  const [activities, setActivities] = useState<ClientActivity[]>(() => client.activities ?? []);
+  const [gameplan, setGameplan] = useState<Record<string, { cue: string; ask: string }>>({});
+  const [busy, setBusy] = useState<null | 'web' | 'prep' | 'note' | 'gen' | 'save'>(null);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [url, setUrl] = useState<string>(() => String((client.inputs as Record<string, unknown>).website ?? '').trim());
-  const [transcript, setTranscript] = useState('');
-  const [showNotes, setShowNotes] = useState(false);
+  const [noteText, setNoteText] = useState('');
+  const [showSources, setShowSources] = useState(false);
   const dirty = useRef(false);
   const hydrated = useRef(false); // one-shot: the entry refetch may apply only ONCE, never after an edit
   const inputsRef = useRef(inputs); inputsRef.current = inputs;
+  const activitiesRef = useRef(activities); activitiesRef.current = activities;
+  const filesRef = useRef(files); filesRef.current = files;
 
   // On entry, re-pull the client (the single source of truth) + its files, so anything
   // gathered since — bills, transcripts, edits in other sections — shows here. The one-shot
@@ -88,6 +92,7 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
     let cancelled = false;
     api.profiles.get(client.id).then((fresh) => {
       if (!cancelled && !hydrated.current && !dirty.current) setInputs(fresh.inputs as ReportInputs);
+      if (!cancelled) setActivities(fresh.activities ?? []);
       hydrated.current = true;
     }).catch(() => { hydrated.current = true; });
     api.files.list({ clientProfileId: client.id }).then((f) => { if (!cancelled) setFiles(f); }).catch(() => {});
@@ -145,14 +150,57 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
     } catch (e) { setErr(String((e as Error).message)); } finally { setBusy(null); }
   };
 
-  const readNotes = async () => {
-    if (!transcript.trim()) { setErr('Paste a call transcript or notes first.'); return; }
-    setBusy('notes'); setErr(null); setNote(null);
+  // Prep the call from everything the client profile already holds: fill what we can, then
+  // brief the agent on each remaining question with a relevant cue + a way to ask it.
+  const prepCall = async (acts: ClientActivity[] = activitiesRef.current) => {
+    setBusy('prep'); setErr(null); setNote(null);
     try {
-      const res = await api.rfq.extract(transcript, rfqAllValues(inputsRef.current));
-      if (res.error) setErr(res.error);
-      else { const { inputs: merged, filled } = applyRfqExtract(inputsRef.current, res.fields, 'transcript'); update(merged); setNote(filled ? `Filled ${filled} answer${filled === 1 ? '' : 's'} from your notes.` : 'No new answers found in those notes.'); }
+      let merged = inputsRef.current;
+      const ctx = buildRfqContext(merged, acts);
+      let filled = 0;
+      let extractFailed = false;
+      if (ctx.trim()) {
+        const ex = await api.rfq.extract(ctx, rfqAllValues(merged));
+        if (ex.error) { setErr(ex.error); extractFailed = true; }
+        else { const r = applyRfqExtract(merged, ex.fields, 'transcript'); merged = r.inputs; filled = r.filled; }
+      }
+      if (merged !== inputsRef.current) update(merged);
+      // Brief on what's still missing (skip derived/record fields).
+      const missing = RFQ_FIELDS.filter((f) => {
+        const view = rfqFieldView(merged, f.key);
+        if (view.derived) return false;
+        const v = view.value || (f.key === 'billsAvailable' && filesRef.current.length ? 'Yes' : '');
+        return !v.trim();
+      });
+      let gameplanFailed = false;
+      if (!missing.length) {
+        setGameplan({}); // nothing left to brief — clear any stale cues
+      } else if (ctx.trim() && !extractFailed) {
+        const gp = await api.rfq.gameplan(buildRfqContext(merged, acts), missing.map((f) => ({ key: f.key, question: f.question })));
+        if (gp.error) { gameplanFailed = true; setErr(gp.error); }
+        else { const map: Record<string, { cue: string; ask: string }> = {}; for (const it of gp.items) if (it.cue || it.ask) map[it.key] = { cue: it.cue, ask: it.ask }; setGameplan(map); }
+      }
+      if (!extractFailed && !gameplanFailed) {
+        setNote(ctx.trim()
+          ? `Filled ${filled} from this client’s history${missing.length ? `; briefed you on ${missing.length} still to ask.` : '.'}`
+          : 'No history on this client yet — log a call note or pull from the website to build the brief.');
+      }
     } catch (e) { setErr(String((e as Error).message)); } finally { setBusy(null); }
+  };
+
+  // Log a call note onto the client timeline (so it lives on the profile, not just here),
+  // then re-prep so the form + brief reflect it.
+  const logNote = async () => {
+    if (!noteText.trim()) { setErr('Add a call note first.'); return; }
+    setBusy('note'); setErr(null);
+    try {
+      await api.profiles.addActivity(client.id, { type: 'note', title: 'RFQ call note', detail: noteText.trim() });
+      setNoteText('');
+      const fresh = await api.profiles.get(client.id);
+      const acts = fresh.activities ?? [];
+      activitiesRef.current = acts; setActivities(acts);
+      await prepCall(acts);
+    } catch (e) { setErr(String((e as Error).message)); setBusy(null); }
   };
 
   const generate = async () => {
@@ -192,24 +240,35 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
 
       {(err || note) && <div className={'rounded-lg px-3 py-2 text-[12px] ' + (err ? 'bg-up/10 text-up' : 'bg-brand-tint text-brand-greenDark')}>{err || note}</div>}
 
-      {/* auto-fill controls (feed the client record, which feeds the form) */}
-      <section className="card p-4 space-y-3">
-        <div className="flex items-end gap-2">
-          <div className="flex-1">
-            <label className="text-[11px] text-brand-muted block mb-0.5 flex items-center gap-1.5"><Globe size={12} /> Company website</label>
-            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="acme.co.uk" className="input !py-1.5 text-sm" />
-          </div>
-          <button onClick={pullWebsite} className="btn-ghost !py-1.5" disabled={!!busy}>{busy === 'web' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Pull basics</button>
-        </div>
-        <div>
-          <button onClick={() => setShowNotes((s) => !s)} className="text-[12px] text-brand-greenDark inline-flex items-center gap-1.5"><MessageSquareText size={13} /> {showNotes ? 'Hide' : 'Paste a call transcript / notes'}</button>
-          {showNotes && (
-            <div className="mt-2 space-y-2">
-              <textarea value={transcript} onChange={(e) => setTranscript(e.target.value)} rows={5} placeholder="Paste the qualification call transcript or your notes — we’ll fill the form’s answers." className="input !py-1.5 text-sm resize-y" />
-              <button onClick={readNotes} className="btn-ghost !py-1.5" disabled={!!busy}>{busy === 'notes' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Read &amp; fill answers</button>
+      {/* call prep — draws on everything the client profile already holds */}
+      <section className="card p-4">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2.5">
+            <span className="grid place-items-center h-9 w-9 rounded-lg bg-brand-tint text-brand-greenDark shrink-0"><Sparkles size={17} /></span>
+            <div>
+              <div className="text-sm font-semibold">Call prep</div>
+              <p className="text-[11px] text-brand-muted">Reads this client’s record, conversations &amp; talking points — fills what we can and briefs you on the rest.</p>
             </div>
-          )}
+          </div>
+          <button onClick={() => prepCall()} className="btn-primary !py-1.5 shrink-0" disabled={!!busy}>{busy === 'prep' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Prep call</button>
         </div>
+        <button onClick={() => setShowSources((s) => !s)} className="text-[12px] text-brand-greenDark inline-flex items-center gap-1.5 mt-3"><MessageSquareText size={13} /> {showSources ? 'Hide' : 'Log a call note or add a source'}</button>
+        {showSources && (
+          <div className="mt-2 space-y-3 border-t border-brand-line pt-3">
+            <div>
+              <label className="text-[11px] text-brand-muted block mb-0.5">Log a call note — saved to the client timeline, then used to fill the form</label>
+              <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} rows={4} placeholder="Type or paste what they said on the call…" className="input !py-1.5 text-sm resize-y" />
+              <button onClick={logNote} className="btn-ghost !py-1.5 mt-1.5" disabled={!!busy}>{busy === 'note' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Log &amp; fill from this</button>
+            </div>
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <label className="text-[11px] text-brand-muted block mb-0.5 flex items-center gap-1.5"><Globe size={12} /> Company website</label>
+                <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="acme.co.uk" className="input !py-1.5 text-sm" />
+              </div>
+              <button onClick={pullWebsite} className="btn-ghost !py-1.5" disabled={!!busy}>{busy === 'web' ? <Loader2 size={15} className="animate-spin" /> : <Globe size={15} />} Pull</button>
+            </div>
+          </div>
+        )}
       </section>
 
       <div className="grid xl:grid-cols-2 gap-5 items-start">
@@ -222,7 +281,7 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
               <ReadyChip ok={loaReady} okLabel="LOA drafted" noLabel="LOA not yet" icon={<FileSignature size={12} />} />
               <ReadyChip ok={files.length > 0} okLabel={`${files.length} bill${files.length === 1 ? '' : 's'}/doc on file`} noLabel="No bills yet" icon={<ReceiptText size={12} />} />
             </div>
-            <p className="text-[11px] text-brand-muted mt-2">{allDone ? 'Every detail captured — generate the form for the closer.' : `${comp.total - comp.known} to capture. Ask the questions below, or one-click N/A what doesn’t apply.`}</p>
+            <p className="text-[11px] text-brand-muted mt-2">{allDone ? 'Every detail captured — generate the form for the closer.' : `${comp.total - comp.known} to capture. Hit “Prep call” to draw on what they’ve already told us, then work the questions below.`}</p>
           </section>
 
           {allDone ? (
@@ -255,6 +314,10 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
                             {filled ? <Check size={13} className="text-brand-green mt-0.5 shrink-0" /> : <Circle size={11} className="text-brand-line mt-1 shrink-0" />}
                             <span>{f.question}{view.derived && <span className="text-brand-muted"> · from the client record</span>}</span>
                           </label>
+                          {!filled && gameplan[f.key]?.cue && (
+                            <div className="text-[11px] text-brand-greenDark bg-brand-tint rounded px-2 py-1 mb-1 leading-snug flex gap-1.5"><Lightbulb size={12} className="mt-0.5 shrink-0" /><span><b>You already know:</b> {gameplan[f.key].cue}</span></div>
+                          )}
+                          {!filled && gameplan[f.key]?.ask && <p className="text-[11px] text-brand-muted italic mb-1 leading-snug">Try: “{gameplan[f.key].ask}”</p>}
                           {view.derived ? (
                             <div className="input !py-1.5 text-sm bg-brand-tint/30 text-brand-muted">{value || 'Add this in the client’s meters'}</div>
                           ) : f.multiline ? (
