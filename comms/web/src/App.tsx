@@ -8,6 +8,7 @@ import { ClientsHome } from './components/ClientsHome';
 import { LoaSection } from './components/LoaSection';
 import { RfqSection } from './components/RfqSection';
 import { BillAnalysis } from './components/BillAnalysis';
+import { AmbientBackground } from './components/AmbientBackground';
 import { WorkspaceProvider, useWorkspace } from './workspace/WorkspaceContext';
 import { usePersisted } from './lib/usePersisted';
 
@@ -57,9 +58,10 @@ function Shell({ section, setSection, collapsed, onToggleCollapse, loaClientId, 
 
   return (
     <div className="flex min-h-full">
+      <AmbientBackground />
       <Sidebar section={section} onChange={setSection} collapsed={collapsed} onToggleCollapse={onToggleCollapse} docCount={ws.count} />
 
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="relative z-10 flex-1 min-w-0 flex flex-col">
         <div className="h-[var(--topbar-h)] shrink-0 sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-brand-line flex items-center px-5 lg:px-8">
           <span className="text-sm font-semibold">{SECTION_LABEL[section]}</span>
         </div>
