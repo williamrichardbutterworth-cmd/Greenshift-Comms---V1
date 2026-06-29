@@ -1,17 +1,23 @@
-import { LayoutDashboard, Newspaper, Users, Sparkles, Lightbulb, FileText, FileSignature, ClipboardList, ReceiptText, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { LayoutDashboard, Newspaper, Users, Sparkles, Lightbulb, FileText, FileSignature, ClipboardList, ReceiptText, Mail, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 // Section ids are STABLE (referenced widely as `tab`); only labels/icons change.
-export type Tab = 'dashboard' | 'brief' | 'news' | 'report' | 'bills' | 'documents' | 'loa' | 'rfq' | 'ideas';
+// 'documents' keeps its id but is now labelled "Reports". 'emails' is a section.
+export type Tab = 'dashboard' | 'brief' | 'news' | 'report' | 'emails' | 'bills' | 'documents' | 'loa' | 'rfq' | 'ideas';
 
+// Client-work order follows the real job sequence: profile the client (Clients),
+// handle their dialogue (Emails), request & analyse bills (Bill Analysis), get the
+// LOA signed (Letters of Authority), complete the qualification (RFQ), then produce
+// the client-facing documents (Reports).
 export const NAV: { id: Tab; label: string; icon: typeof LayoutDashboard; group?: 'intel' | 'work' }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, group: 'intel' },
   { id: 'brief', label: 'Daily Brief', icon: Sparkles, group: 'intel' },
   { id: 'news', label: 'News', icon: Newspaper, group: 'intel' },
   { id: 'report', label: 'Clients', icon: Users, group: 'work' },
+  { id: 'emails', label: 'Emails', icon: Mail, group: 'work' },
   { id: 'bills', label: 'Bill Analysis', icon: ReceiptText, group: 'work' },
-  { id: 'documents', label: 'Documents', icon: FileText, group: 'work' },
   { id: 'loa', label: 'Letters of Authority', icon: FileSignature, group: 'work' },
   { id: 'rfq', label: 'RFQ', icon: ClipboardList, group: 'work' },
+  { id: 'documents', label: 'Reports', icon: FileText, group: 'work' },
   { id: 'ideas', label: 'Admin Ideas', icon: Lightbulb, group: 'work' },
 ];
 

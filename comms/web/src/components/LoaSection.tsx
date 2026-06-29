@@ -13,18 +13,19 @@ import { LoaVisualEditor } from './LoaVisualEditor';
 // The Letter of Authority section: pick a client, then a visual builder that fills
 // the real LOA template (editable + draggable) from the client record /
 // conversations / Companies House, tracks known vs missing, and exports the PDF.
-export function LoaSection({ initialClientId, onConsumed }: { initialClientId?: string | null; onConsumed?: () => void } = {}) {
+export function LoaSection({ initialClientId, onExit }: { initialClientId?: string | null; onExit?: () => void } = {}) {
   const [clients, setClients] = useState<ClientProfile[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const refresh = useCallback(() => api.profiles.list().then(setClients).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh]);
   // Deep-link: open straight into a client's builder when navigated here from their hub.
-  useEffect(() => {
-    if (initialClientId) { setActiveId(initialClientId); onConsumed?.(); }
-  }, [initialClientId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (initialClientId) setActiveId(initialClientId); }, [initialClientId]);
 
   const active = activeId ? clients.find((c) => c.id === activeId) ?? null : null;
-  if (active) return <LoaBuilder key={active.id} client={active} onBack={() => { setActiveId(null); refresh(); }} />;
+  // When a client tab scopes this section (onExit set), "Back" leaves the scope (to
+  // the client hub) rather than dropping into the cross-client picker; on the Free tab
+  // the picker IS the right destination.
+  if (active) return <LoaBuilder key={active.id} client={active} onBack={() => { if (onExit) onExit(); else { setActiveId(null); refresh(); } }} />;
 
   return (
     <div className="space-y-4">

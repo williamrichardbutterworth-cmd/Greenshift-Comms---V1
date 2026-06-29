@@ -1,11 +1,14 @@
-import { FilePlus2, X, FileText, Plus } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { FilePlus2, X, FileText, Plus, ExternalLink } from 'lucide-react';
+import { api, type ClientProfile } from '../lib/api';
 import { useWorkspace } from '../workspace/WorkspaceContext';
 import { ReportStudio } from './reports/ReportStudio';
 
-// The Documents workspace: a strip of open-report tabs over the active studio.
+// The Reports workspace: a strip of open-report tabs over the active studio.
 // Open reports persist in the workspace store, so you can leave for other
-// sections and come back to them intact.
-export function DocumentsSection() {
+// sections and come back to them intact. With a client tab active (clientId set)
+// and nothing open, it shows that client's reports to open or create.
+export function DocumentsSection({ clientId }: { clientId?: string } = {}) {
   const ws = useWorkspace();
   const active = ws.activeId ? ws.sessions[ws.activeId] : null;
 
@@ -45,6 +48,12 @@ export function DocumentsSection() {
 
       {active ? (
         <ReportStudio key={active.id} project={active.project} onProjectSaved={ws.updateProject} />
+      ) : clientId ? (
+        <ClientReports
+          clientId={clientId}
+          onOpen={(id) => ws.openDocById(id)}
+          onNew={() => ws.requestNewDoc({ profileId: clientId })}
+        />
       ) : (
         <div className="card p-12 text-center max-w-xl mx-auto mt-6">
           <div className="grid place-items-center h-12 w-12 rounded-xl bg-brand-tint text-brand-greenDark mx-auto mb-3"><FileText size={22} /></div>
@@ -53,6 +62,44 @@ export function DocumentsSection() {
             Open a report from a client, or start a new one. Open reports stay here as tabs while you work elsewhere in the app.
           </p>
           <button className="btn-primary mx-auto" onClick={() => ws.requestNewDoc({})}><FilePlus2 size={16} /> New report</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Client-scoped Reports landing: that client's generated reports + a "new" button.
+// A client's reports are linked through its 'document' activities (meta.projectId).
+function ClientReports({ clientId, onOpen, onNew }: { clientId: string; onOpen: (id: string) => void; onNew: () => void }) {
+  const [client, setClient] = useState<ClientProfile | null>(null);
+  useEffect(() => { api.profiles.get(clientId).then(setClient).catch(() => setClient(null)); }, [clientId]);
+
+  const reports = (client?.activities ?? []).filter((a) => a.type === 'document' && a.meta?.projectId);
+
+  return (
+    <div className="max-w-content mx-auto mt-2">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h2 className="text-lg font-semibold leading-tight">Reports{client ? ` — ${client.name}` : ''}</h2>
+          <p className="text-sm text-brand-muted">Open one to edit, or create a new report for this client.</p>
+        </div>
+        <button className="btn-primary !py-1.5" onClick={onNew}><FilePlus2 size={15} /> New report</button>
+      </div>
+      {reports.length > 0 ? (
+        <div className="card divide-y divide-brand-line">
+          {reports.map((a) => (
+            <button key={a.id} className="flex items-center gap-3 w-full text-left px-4 py-3 hover:bg-brand-surface transition" onClick={() => onOpen(String(a.meta!.projectId))}>
+              <span className="grid place-items-center h-8 w-8 rounded-lg bg-brand-tint text-brand-greenDark shrink-0"><FileText size={14} /></span>
+              <span className="flex-1 truncate text-sm font-medium">{a.title.replace(/^Created /, '')}</span>
+              <ExternalLink size={14} className="text-brand-muted shrink-0" />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="card p-10 text-center">
+          <div className="grid place-items-center h-12 w-12 rounded-xl bg-brand-tint text-brand-greenDark mx-auto mb-3"><FileText size={22} /></div>
+          <p className="text-sm text-brand-muted mb-4">No reports for this client yet.</p>
+          <button className="btn-primary mx-auto" onClick={onNew}><FilePlus2 size={16} /> New report</button>
         </div>
       )}
     </div>

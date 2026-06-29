@@ -1,7 +1,24 @@
-import type { ClientStage, ActivityType } from './api';
+import type { ClientStage, ActivityType, ClientActivity } from './api';
 
 // Shared CRM vocabulary — pipeline stages, tracker milestones and activity
 // metadata, used by the client hub and the client list.
+
+// The client's "talk track": conversational angles gathered across all logged
+// sources, newest first, de-duplicated. Shared by the client hub + the emails view.
+export function gatherAngles(activities: ClientActivity[] | undefined, limit = 8): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const a of activities ?? []) {
+    for (const ang of Array.isArray(a.meta?.angles) ? a.meta!.angles : []) {
+      if (typeof ang !== 'string') continue;
+      const t = ang.trim();
+      const k = t.toLowerCase();
+      if (t && !seen.has(k)) { seen.add(k); out.push(t); }
+    }
+    if (out.length >= limit) break;
+  }
+  return out;
+}
 
 export const STAGES: { key: ClientStage; label: string }[] = [
   { key: 'new', label: 'New lead' },

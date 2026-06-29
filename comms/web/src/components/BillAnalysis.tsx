@@ -70,7 +70,7 @@ const ANALYSING_STEPS = [
   'Cross-checking the figures…',
 ];
 
-export function BillAnalysis() {
+export function BillAnalysis({ initialClientId }: { initialClientId?: string } = {}) {
   const [phase, setPhase] = useState<'setup' | 'analyzing' | 'review' | 'done'>('setup');
   const [clients, setClients] = useState<ClientProfile[]>([]);
   const [clientId, setClientId] = useState<string>('');
@@ -88,6 +88,8 @@ export function BillAnalysis() {
   const markRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => { api.profiles.list().then(setClients).catch(() => {}); }, []);
+  // With a client tab active, assume the bill is for that client (still changeable).
+  useEffect(() => { if (initialClientId) { setClientId(initialClientId); setMeterChoice(''); } }, [initialClientId]);
   const client = useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
   const meters = client ? getMeters(client.inputs as ReportInputs) : [];
 
@@ -101,6 +103,14 @@ export function BillAnalysis() {
 
   // scroll the active highlight into view when switching fields on the text tab
   useEffect(() => { if (leftTab === 'text') markRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, [activeKey, leftTab]);
+
+  // On teardown (switching client tab / section remounts this), drop an un-approved
+  // uploaded bill so it isn't orphaned on the server. A done (approved) bill is kept.
+  const uploadedRef = useRef<ClientFile | null>(null); uploadedRef.current = uploaded;
+  const phaseRef = useRef(phase); phaseRef.current = phase;
+  useEffect(() => () => {
+    if (uploadedRef.current && phaseRef.current !== 'done') api.files.remove(uploadedRef.current.id).catch(() => {});
+  }, []);
 
   const analyse = async () => {
     if (!file || !client || !meterChoice) return;

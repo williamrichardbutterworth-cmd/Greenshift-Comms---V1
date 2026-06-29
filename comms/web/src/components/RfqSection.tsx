@@ -19,15 +19,16 @@ function download(blob: Blob, name: string) {
 // The RFQ section: pick a client, then a call-assistant + editable Lead Generation Form.
 // Fields are bound to the client record (one source of truth) — everything the app gathers
 // flows in automatically; you close the gaps on the RFQ call and export the Word form.
-export function RfqSection({ initialClientId, onConsumed }: { initialClientId?: string | null; onConsumed?: () => void } = {}) {
+export function RfqSection({ initialClientId, onExit }: { initialClientId?: string | null; onExit?: () => void } = {}) {
   const [clients, setClients] = useState<ClientProfile[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const refresh = useCallback(() => api.profiles.list().then(setClients).catch(() => {}), []);
   useEffect(() => { refresh(); }, [refresh]);
-  useEffect(() => { if (initialClientId) { setActiveId(initialClientId); onConsumed?.(); } }, [initialClientId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (initialClientId) setActiveId(initialClientId); }, [initialClientId]);
 
   const active = activeId ? clients.find((c) => c.id === activeId) ?? null : null;
-  if (active) return <RfqBuilder key={active.id} client={active} onBack={() => { setActiveId(null); refresh(); }} />;
+  // Client-scoped (onExit set) → "Back" leaves to the client hub; Free → the picker.
+  if (active) return <RfqBuilder key={active.id} client={active} onBack={() => { if (onExit) onExit(); else { setActiveId(null); refresh(); } }} />;
 
   return (
     <div className="space-y-4">

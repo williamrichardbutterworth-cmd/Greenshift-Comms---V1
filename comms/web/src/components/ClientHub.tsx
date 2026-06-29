@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, FileText, Paperclip, Plus, FilePlus2,
   Phone, CheckCircle2, Circle, RefreshCw, Trash2, ExternalLink,
-  Wand2, Lightbulb, Copy, Check, UploadCloud, FileSignature, ClipboardList,
+  Wand2, Lightbulb, Copy, Check, UploadCloud, FileSignature, ClipboardList, ReceiptText,
 } from 'lucide-react';
 import {
   api, type ClientProfile, type ClientStage, type ClientFile, type ActivityType,
@@ -10,8 +10,8 @@ import {
 } from '../lib/api';
 import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, stageIndex } from '../lib/crm';
 import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '../lib/loa';
+import { rfqCompleteness } from '../lib/rfq';
 import { ClientJourney } from './ClientJourney';
-import { EmailThread } from './EmailThread';
 import { ClientProfilePanel } from './ClientProfilePanel';
 
 const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
@@ -22,15 +22,16 @@ const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
 // deal cockpit: the next step, the talk-track call points and a live-call log up top;
 // the full client record beside the LOA tracker; the milestone tracker + media below.
 export function ClientHub({
-  clientId, onBack, onStartDocument, onDraftFromAngles, onOpenProject, onOpenLoa, onOpenRfq,
+  clientId, onBack, onStartDocument, onDraftFromAngles, onOpenProject, onOpenLoa, onOpenRfq, onOpenBills,
 }: {
   clientId: string;
   onBack: () => void;
   onStartDocument: (client: ClientProfile, templateId?: string) => void;
   onDraftFromAngles: (client: ClientProfile, angles: string[]) => void;
   onOpenProject: (projectId: string) => void;
-  onOpenLoa: (clientId: string) => void;
-  onOpenRfq: (clientId: string) => void;
+  onOpenLoa: () => void;
+  onOpenRfq: () => void;
+  onOpenBills: () => void;
 }) {
   const [client, setClient] = useState<ClientProfile | null>(null);
   const [files, setFiles] = useState<ClientFile[]>([]);
@@ -38,7 +39,7 @@ export function ClientHub({
 
   const [next, setNext] = useState<NextStep | null>(null);
   const [nextLoading, setNextLoading] = useState(false);
-  const [view, setView] = useState<'overview' | 'journey' | 'emails'>('overview');
+  const [view, setView] = useState<'overview' | 'journey'>('overview');
 
   const [intakeText, setIntakeText] = useState('');
   const [intakeKind, setIntakeKind] = useState<SourceKind>('transcript');
@@ -167,10 +168,10 @@ export function ClientHub({
       <div className="flex items-center justify-between gap-3">
         <button className="btn-ghost !py-1.5 !px-2" onClick={onBack}><ArrowLeft size={15} /> All clients</button>
         <div className="inline-flex rounded-lg border border-brand-line bg-white p-0.5 text-sm">
-          {(['overview', 'journey', 'emails'] as const).map((v) => (
+          {(['overview', 'journey'] as const).map((v) => (
             <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
               className={'px-3 py-1 rounded-md transition ' + (view === v ? 'bg-brand-tint text-brand-greenDark font-medium' : 'text-brand-muted hover:text-brand-ink')}>
-              {v === 'journey' ? 'Journey' : v === 'emails' ? 'Emails' : 'Overview'}
+              {v === 'journey' ? 'Journey' : 'Overview'}
             </button>
           ))}
         </div>
@@ -233,8 +234,6 @@ export function ClientHub({
           onDraftFromAngles={onDraftFromAngles}
           onOpenProject={onOpenProject}
         />
-      ) : view === 'emails' ? (
-        <EmailThread client={client} inputs={inputs} angles={angles} logActivity={logActivity} />
       ) : (
       <div className="space-y-4">
         {/* ── Deal cockpit: move this deal forward ── */}
@@ -334,23 +333,46 @@ export function ClientHub({
           <ClientProfilePanel inputs={inputs} onSave={(nextInputs) => patch({ inputs: nextInputs })} />
 
           {(() => {
-            const { known, total } = loaCompleteness(deriveLoaFromClient(inputs));
+            const loa = loaCompleteness(deriveLoaFromClient(inputs));
+            const rfq = rfqCompleteness(inputs);
+            const billsAnalysed = client.activities.filter((a) => a.type === 'file' && /bill analysed/i.test(a.title)).length;
+            const billsDone = !!client.tracker.billReceived || billsAnalysed > 0;
             const cv = (inputs as Record<string, unknown>).customerVariables as CustomerVariables | undefined;
+            const Bar = ({ pct }: { pct: number }) => (
+              <div className="h-1.5 rounded-full bg-brand-line overflow-hidden"><div className="h-full bg-brand-green rounded-full" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} /></div>
+            );
             return (
               <section className="card p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-semibold flex items-center gap-1.5"><FileSignature size={14} className="text-brand-greenDark" /> Letter of Authority</h3>
-                  <span className={'text-[11px] font-medium ' + (known === total ? 'text-brand-green' : 'text-brand-muted')}>{known === total ? 'Ready' : `${known}/${total}`}</span>
+                <h3 className="text-sm font-semibold mb-3">Key steps</h3>
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between text-[13px] mb-1">
+                      <span className="flex items-center gap-1.5 font-medium"><ReceiptText size={13} className="text-brand-greenDark" /> Bills analysed</span>
+                      <span className={billsDone ? 'text-brand-green font-medium' : 'text-brand-muted'}>{billsAnalysed > 0 ? billsAnalysed : billsDone ? 'Done' : '—'}</span>
+                    </div>
+                    <Bar pct={billsDone ? 100 : 0} />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between text-[13px] mb-1">
+                      <span className="flex items-center gap-1.5 font-medium"><FileSignature size={13} className="text-brand-greenDark" /> Letter of Authority</span>
+                      <span className={loa.known === loa.total ? 'text-brand-green font-medium' : 'text-brand-muted'}>{loa.known === loa.total ? 'Ready' : `${loa.known}/${loa.total}`}</span>
+                    </div>
+                    <Bar pct={(loa.known / loa.total) * 100} />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between text-[13px] mb-1">
+                      <span className="flex items-center gap-1.5 font-medium"><ClipboardList size={13} className="text-brand-greenDark" /> RFQ qualification</span>
+                      <span className={rfq.known === rfq.total ? 'text-brand-green font-medium' : 'text-brand-muted'}>{rfq.known === rfq.total ? 'Ready' : `${rfq.known}/${rfq.total}`}</span>
+                    </div>
+                    <Bar pct={(rfq.known / rfq.total) * 100} />
+                  </div>
                 </div>
-                <div className="h-1.5 rounded-full bg-brand-line overflow-hidden mb-2"><div className="h-full bg-brand-green rounded-full" style={{ width: `${(known / total) * 100}%` }} /></div>
-                {cv?.fuel && <div className="text-xs text-brand-muted mb-2.5">Buys <span className="text-brand-ink capitalize">{cv.fuel === 'both' ? 'gas & electric' : cv.fuel}</span></div>}
-                <button className="btn-primary w-full justify-center !py-1.5 text-sm mt-1" onClick={() => onOpenLoa(client.id)}>
-                  <FileSignature size={14} /> Open LOA editor
-                </button>
-                <button className="btn-ghost w-full justify-center !py-1.5 text-sm mt-2" onClick={() => onOpenRfq(client.id)}>
-                  <ClipboardList size={14} /> Open RFQ form
-                </button>
-                <p className="text-[11px] text-brand-muted mt-1.5">Both auto-fill from this record; polish &amp; export in the editor.</p>
+                {cv?.fuel && <div className="text-xs text-brand-muted mt-3">Buys <span className="text-brand-ink capitalize">{cv.fuel === 'both' ? 'gas & electric' : cv.fuel}</span></div>}
+                <div className="mt-3 pt-3 border-t border-brand-line space-y-2">
+                  <button className="btn-ghost w-full justify-center !py-1.5 text-sm" onClick={onOpenBills}><ReceiptText size={14} /> Open Bill Analysis</button>
+                  <button className="btn-primary w-full justify-center !py-1.5 text-sm" onClick={onOpenLoa}><FileSignature size={14} /> Open LOA editor</button>
+                  <button className="btn-ghost w-full justify-center !py-1.5 text-sm" onClick={onOpenRfq}><ClipboardList size={14} /> Open RFQ form</button>
+                </div>
               </section>
             );
           })()}

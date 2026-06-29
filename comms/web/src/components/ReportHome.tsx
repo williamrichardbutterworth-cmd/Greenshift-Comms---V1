@@ -29,7 +29,7 @@ export function ReportHome({
   onNew: () => void;
   onNewClient: () => void;
   onNewForClient: (profileId: string) => void;
-  onOpenClient: (id: string) => void;
+  onOpenClient: (id: string, name: string) => void;
   onRefresh: () => void;
 }) {
   const [profiles, setProfiles] = useState<ClientProfile[]>([]);
@@ -110,8 +110,8 @@ export function ReportHome({
               tabIndex={0}
               aria-label={`Open client ${p.name || 'Untitled'}`}
               className="group card p-4 cursor-pointer transition hover:shadow-md hover:-translate-y-px flex flex-col gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-green"
-              onClick={() => onOpenClient(p.id)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenClient(p.id); } }}
+              onClick={() => onOpenClient(p.id, p.name)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenClient(p.id, p.name); } }}
             >
               <div className="flex items-start gap-2.5">
                 <span className="grid place-items-center h-9 w-9 rounded-lg bg-brand-green/10 text-brand-greenDark shrink-0"><Building2 size={16} /></span>
