@@ -400,7 +400,25 @@ export interface ChSearchResult { items: ChCompanySummary[]; provider: string; e
 export interface ChCompanyResult { company: ChCompanyProfile | null; provider: string; error?: string; }
 
 // ── Comprehensive client intake (website + transcript + bills → profile) ──
-export interface ClientMeter { type: 'electric' | 'gas'; mpan?: string; mprn?: string; siteAddress?: string; supplier?: string; contractEnd?: string; consumption?: string; }
+// A per-client supply point. Beyond identity, it now carries the full rate picture a UK
+// bill yields (day/night/standing + meter type), so a bill auto-populates the cost
+// comparison's current block and the RFQ. All optional — single-rate meters leave the
+// night band blank; non-electric leave MPAN/profile blank.
+export interface ClientMeter {
+  type: 'electric' | 'gas';
+  mpan?: string; mprn?: string; serial?: string;
+  siteAddress?: string; supplier?: string;
+  contractEnd?: string; consumption?: string;
+  // rate picture (from the bill)
+  meterType?: string;        // "Single rate" | "Economy 7" | "Economy 10" | "Half-hourly" | "Variable"
+  profileClass?: string;     // electricity profile class "00".."08"
+  dayRate?: string;          // p/kWh (single-rate value goes here)
+  nightRate?: string;        // p/kWh
+  standing?: string;         // p/day
+  dayConsumption?: string;   // annual kWh, day band (single-rate puts total here)
+  nightConsumption?: string; // annual kWh, night band
+  capacity?: string;         // available/agreed supply capacity, kVA (half-hourly)
+}
 export interface ClientIntakeResult {
   companyName: string; registeredNo: string; businessAddress: string; postcode: string; industry: string;
   contactName: string; position: string; email: string; telephone: string;

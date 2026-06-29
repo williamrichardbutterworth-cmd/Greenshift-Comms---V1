@@ -58,17 +58,20 @@ function metersFromClient(inputs: ReturnType<typeof asInputs>): MeterLine[] {
   const headlineRate = getField(inputs, 'currentUnitRate');
   const headlineStanding = getField(inputs, 'currentStanding');
   if (meters.length) {
+    // Pull the full rate picture the bill captured onto the meter — day/night rates,
+    // standing and per-band consumption — so a bill auto-fills the current block. Fall
+    // back to the headline current rates for a lone meter that has none yet.
     return meters.map((m: ClientMeter) => ({
       id: rid(),
       meterNumber: (m.type === 'gas' ? m.mprn : m.mpan) || '',
       fuel: m.type,
       site: (m.siteAddress ?? '').trim(),
       currentSupplier: (m.supplier ?? '').trim() || getField(inputs, 'currentSupplier'),
-      dayConsumption: fmtConsumption(m.consumption),
-      dayRate: single ? headlineRate : '',
-      nightConsumption: '',
-      nightRate: '',
-      standing: single ? headlineStanding : '',
+      dayConsumption: fmtConsumption((m.dayConsumption ?? '').trim() || m.consumption),
+      dayRate: (m.dayRate ?? '').trim() || (single ? headlineRate : ''),
+      nightConsumption: fmtConsumption(m.nightConsumption),
+      nightRate: (m.nightRate ?? '').trim(),
+      standing: (m.standing ?? '').trim() || (single ? headlineStanding : ''),
     }));
   }
   // No meters on file → one row seeded from the headline record.

@@ -10,23 +10,40 @@ import { getMeters, meterLabel } from '../lib/clientProfile';
 // goes onto the selected meter; a plain key goes onto client inputs; no target = shown
 // for context only (not stored).
 const REGISTRY: Record<string, { label: string; group: string; target?: string }> = {
+  // Supplier & account
   supplier: { label: 'Supplier', group: 'Supplier & account', target: 'currentSupplier' },
   accountNumber: { label: 'Account number', group: 'Supplier & account' },
   companyName: { label: 'Company name', group: 'Supplier & account', target: 'companyName' },
-  businessAddress: { label: 'Business address', group: 'Supplier & account', target: 'businessAddress' },
+  businessAddress: { label: 'Supply address', group: 'Supplier & account', target: 'businessAddress' },
   postcode: { label: 'Postcode', group: 'Supplier & account', target: 'postcode' },
   billDate: { label: 'Bill date', group: 'Supplier & account' },
-  meterType: { label: 'Meter type', group: 'Meter & consumption', target: 'meter.type' },
-  mpan: { label: 'MPAN', group: 'Meter & consumption', target: 'meter.mpan' },
-  mprn: { label: 'MPRN', group: 'Meter & consumption', target: 'meter.mprn' },
-  consumption: { label: 'Annual consumption', group: 'Meter & consumption', target: 'consumption' },
-  currentUnitRate: { label: 'Unit rate (p/kWh)', group: 'Rates & charges', target: 'currentUnitRate' },
+  // Meter (technical)
+  meterType: { label: 'Fuel', group: 'Meter', target: 'meter.type' },
+  mpan: { label: 'MPAN', group: 'Meter', target: 'meter.mpan' },
+  mprn: { label: 'MPRN', group: 'Meter', target: 'meter.mprn' },
+  meterSerial: { label: 'Meter serial', group: 'Meter', target: 'meter.serial' },
+  profileClass: { label: 'Profile class', group: 'Meter', target: 'meter.profileClass' },
+  meterClass: { label: 'Meter type', group: 'Meter', target: 'meter.meterType' },
+  capacity: { label: 'Capacity (kVA)', group: 'Meter', target: 'meter.capacity' },
+  // Rates & charges
+  currentUnitRate: { label: 'Unit rate — single (p/kWh)', group: 'Rates & charges', target: 'currentUnitRate' },
+  dayRate: { label: 'Day rate (p/kWh)', group: 'Rates & charges', target: 'meter.dayRate' },
+  nightRate: { label: 'Night rate (p/kWh)', group: 'Rates & charges', target: 'meter.nightRate' },
   currentStanding: { label: 'Standing charge (p/day)', group: 'Rates & charges', target: 'currentStanding' },
-  totalAmount: { label: 'Bill total', group: 'Rates & charges' },
+  totalAmount: { label: 'Bill total (£)', group: 'Rates & charges' },
+  cclRate: { label: 'CCL (p/kWh)', group: 'Rates & charges' },
+  vatRate: { label: 'VAT rate', group: 'Rates & charges' },
+  // Consumption
+  consumption: { label: 'Annual consumption (kWh)', group: 'Consumption', target: 'consumption' },
+  dayConsumption: { label: 'Day consumption (kWh)', group: 'Consumption', target: 'meter.dayConsumption' },
+  nightConsumption: { label: 'Night consumption (kWh)', group: 'Consumption', target: 'meter.nightConsumption' },
+  billPeriod: { label: 'Billing period', group: 'Consumption' },
+  // Contract
   contractEnd: { label: 'Contract end date', group: 'Contract', target: 'contractEnd' },
   currentProduct: { label: 'Product / tariff', group: 'Contract', target: 'currentProduct' },
+  contractType: { label: 'Contract type', group: 'Contract' },
 };
-const GROUP_ORDER = ['Supplier & account', 'Meter & consumption', 'Rates & charges', 'Contract'];
+const GROUP_ORDER = ['Supplier & account', 'Meter', 'Rates & charges', 'Consumption', 'Contract'];
 
 const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader(); r.onload = () => res((r.result as string).split(',')[1] ?? ''); r.onerror = rej; r.readAsDataURL(file);
@@ -96,8 +113,18 @@ export function BillAnalysis() {
       const base64 = await fileToBase64(file);
       const saved = await api.files.upload({ name: file.name, mime: file.type, dataBase64: base64, clientProfileId: client.id });
       savedId = saved.id; setUploaded(saved);
+      // A non-image file with no extractable text layer (a scanned/photographed PDF, an
+      // image-only Word doc) gives the swarm nothing to read — and we can't rasterise it
+      // to feed vision. Guide the user to re-upload it as a photo so vision can read it,
+      // rather than failing with a generic message.
+      const extracted = (saved.extractedText || '').trim();
+      if (!extracted && !isImage(file.type)) {
+        api.files.remove(saved.id).catch(() => {}); setUploaded(null);
+        setErr('This file has no readable text layer — it looks like a scanned or image-only document. Please re-upload the bill as a photo or screenshot (JPG/PNG) so the analyser can read it visually.');
+        setPhase('setup'); return;
+      }
       const res = await api.bill.analyze({
-        text: saved.extractedText || undefined,
+        text: extracted || undefined,
         image: isImage(file.type) ? { base64, mime: file.type } : undefined,
       });
       const failed = (res.error && res.provider !== 'claude' && res.provider !== 'openai') || !res.fields.length;
@@ -149,10 +176,29 @@ export function BillAnalysis() {
     const patch: Partial<ClientMeter> = {};
     if (get('mpan')) patch.mpan = get('mpan');
     if (get('mprn')) patch.mprn = get('mprn');
+    if (get('meterSerial')) patch.serial = get('meterSerial');
+    if (get('profileClass')) patch.profileClass = get('profileClass');
+    if (get('meterClass')) patch.meterType = get('meterClass');
+    if (get('capacity')) patch.capacity = get('capacity');
     if (get('supplier')) patch.supplier = get('supplier');
     if (get('contractEnd')) patch.contractEnd = get('contractEnd');
-    if (get('consumption')) patch.consumption = get('consumption');
-    if (get('businessAddress')) patch.siteAddress = get('businessAddress');
+    // The supply address is a property of THIS meter, not the trading-entity identity the
+    // opt-in guard protects — so name the meter's site from it even when the client-level
+    // identity overwrite was left un-ticked. (Read raw, bypassing the apply gate.)
+    const siteAddr = (values['businessAddress'] ?? '').trim();
+    if (siteAddr) patch.siteAddress = siteAddr;
+    // rate picture — a single unit rate lands on the day band; explicit day/night override it.
+    const dayRate = get('dayRate') || get('currentUnitRate');
+    if (dayRate) patch.dayRate = dayRate;
+    if (get('nightRate')) patch.nightRate = get('nightRate');
+    if (get('currentStanding')) patch.standing = get('currentStanding');
+    // consumption split — a single-rate total lands on the day band.
+    const dayC = get('dayConsumption') || (get('nightConsumption') ? '' : get('consumption'));
+    if (dayC) patch.dayConsumption = dayC;
+    if (get('nightConsumption')) patch.nightConsumption = get('nightConsumption');
+    // keep a distinct annual total only when it wasn't already folded into the day band,
+    // so a single-rate bill doesn't store the same figure on two meter fields.
+    if (get('consumption') && get('consumption') !== dayC) patch.consumption = get('consumption');
     if (existing) list[idx] = { ...existing, ...patch };
     else list.push({ type: billFuel || 'electric', ...patch });
     inputs.meters = list;
@@ -207,8 +253,8 @@ export function BillAnalysis() {
                 <label className={'flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 cursor-pointer transition ' + (file ? 'border-brand-green bg-brand-tint/50' : 'border-brand-line hover:border-brand-green/50 hover:bg-brand-tint/30')}>
                   {file ? <FileText size={26} className="text-brand-greenDark" /> : <UploadCloud size={26} className="text-brand-muted" />}
                   <span className="text-sm font-medium">{file ? file.name : 'Drop a bill here or click to upload'}</span>
-                  <span className="text-[11px] text-brand-muted">PDF or image (JPG/PNG) · up to ~6 MB</span>
-                  <input type="file" accept=".pdf,image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); e.target.value = ''; }} />
+                  <span className="text-[11px] text-brand-muted">PDF, image, Word, Excel, CSV or text · up to ~6 MB</span>
+                  <input type="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.tsv,image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); e.target.value = ''; }} />
                 </label>
               </div>
               {/* Client */}

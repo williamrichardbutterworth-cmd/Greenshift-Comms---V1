@@ -524,21 +524,30 @@ Guidance:
 // parallel. Each returns its fields with a verbatim source quote + confidence so the
 // agent can show WHERE on the bill every value came from and double-check it. ──
 export interface BillPass { id: string; keys: string[]; focus: string }
+// The specialised extractors — each an expert on one part of a UK energy bill. Keys are
+// disjoint so merging is trivial. Grounded in the UK-bill anatomy (MPAN/MPRN, profile class,
+// Economy-7 day/night, standing charge, capacity, CCL/VAT, contract).
 export const BILL_PASSES: BillPass[] = [
   { id: 'identity', keys: ['supplier', 'accountNumber', 'companyName', 'businessAddress', 'postcode', 'billDate'],
-    focus: 'the energy SUPPLIER name, the account/customer reference number, the customer company/business name, the full supply or business address, the postcode, and the bill issue date' },
-  { id: 'meter', keys: ['meterType', 'mpan', 'mprn', 'consumption'],
-    focus: 'whether this is an ELECTRICITY or GAS bill (meterType = "electric" or "gas"), the MPAN (the long electricity supply number, often laid out in a grid with an "S" / "Supply Number"), the MPRN (gas Meter Point Reference Number), and the consumption in kWh (annual if shown, otherwise the billed-period usage — include the period in the source)' },
-  { id: 'rates', keys: ['currentUnitRate', 'currentStanding', 'totalAmount'],
-    focus: 'the unit rate in pence per kWh (p/kWh), the standing charge in pence per day (p/day), and the total amount due on this bill. If multiple rates exist (day/night, or per-meter), give the primary/most prominent unit rate as the value and note the others verbatim in the source' },
-  { id: 'contract', keys: ['contractEnd', 'currentProduct'],
-    focus: 'the contract END date (or fixed-term expiry / renewal date), and the tariff or product name (e.g. "Fixed 24 month", "Out of contract", "Deemed", "Variable")' },
+    focus: 'the energy SUPPLIER (its legal/trading name — on white-label / third-party bills resolve it from the footer or VAT-registered name, not just the logo), the account/customer reference number, the customer business name, the full SUPPLY (site) address, the postcode, and the bill ISSUE date' },
+  { id: 'meterPoint', keys: ['meterType', 'mpan', 'mprn', 'meterSerial', 'profileClass', 'meterClass', 'capacity'],
+    focus: 'the metering point. meterType = "electric" or "gas". ELECTRIC → mpan = the 21-digit MPAN / supply number (two rows, usually after a big "S"; capture the full 21 digits as ONE continuous string with NO spaces — top 8 = profile class + MTC + line-loss, bottom 13 = distributor 2 + unique ref 10 + check digit 1); profileClass = the FIRST TWO digits of the MPAN top row ("00"=half-hourly, "01"/"03"=single-rate, "02"/"04"=Economy-7 two-rate, "05"–"08"=max-demand). GAS → mprn = the Meter Point Reference Number (a single 6–10 digit run, NOT after an "S"). meterSerial = the meter serial number (MSN) by the readings. meterClass = the rate structure — "Single rate", "Economy 7", "Economy 10", "Half-hourly" or "Variable" (infer from the tariff/plan name, the profile class and the number of registers). capacity = the available/agreed supply capacity in kVA if half-hourly (else "")' },
+  { id: 'rates', keys: ['currentUnitRate', 'dayRate', 'nightRate', 'currentStanding'],
+    focus: 'the unit rates in PENCE per kWh and the standing charge in PENCE per day, from the DETAILED charges table (not the summary). currentUnitRate = the single unit rate IF the bill is single-rate (else ""). dayRate = the DAY / Normal / Rate-1 / peak rate, nightRate = the NIGHT / Off-peak / Low / Rate-2 rate — these appear only on two-rate (Economy 7/10) bills; the DAY rate is the HIGHER of the two and NIGHT the LOWER, so if labels are unclear assign by magnitude. currentStanding = the standing charge p/day. Numbers only (e.g. "24.50"); keep 3–5 decimal places if shown' },
+  { id: 'consumption', keys: ['consumption', 'dayConsumption', 'nightConsumption', 'billPeriod'],
+    focus: 'consumption in kWh. consumption = the ESTIMATED ANNUAL consumption (EAC for electricity / AQ for gas) if shown, else the total billed-PERIOD kWh (say which in the source). dayConsumption / nightConsumption = the day-band and night-band kWh (annual if shown, else the billed period) — only on two-rate meters; for single-rate / gas, leave nightConsumption "". billPeriod = the billing period (from–to dates) exactly as written' },
+  { id: 'charges', keys: ['totalAmount', 'cclRate', 'vatRate'],
+    focus: 'the totals and taxes. totalAmount = the total amount due (£, number only). cclRate = the Climate Change Levy rate in p/kWh if itemised (else ""). vatRate = the VAT rate applied — "20" (standard business) or "5" (reduced)' },
+  { id: 'contract', keys: ['contractEnd', 'currentProduct', 'contractType'],
+    focus: 'the contract END date (search "contract end date", "fixed price end date", "tariff end date", "renewal date", "your plan ends"), the tariff/product NAME (e.g. "Fixed 24 month", "Variable", "Deemed", "Out of contract"), and contractType = "fixed" | "variable" | "deemed" | "out-of-contract" (infer from the product)' },
 ];
 
 export function billPassPrompt(pass: BillPass, text: string | undefined, hasImage: boolean) {
   return {
     system: HOUSE_RULES,
-    prompt: `You are a meticulous UK energy-bill analyst. Extract ONLY ${pass.focus}, from the bill below.${hasImage ? ' The bill is attached as an image — read it carefully, including small print and meter grids.' : ''}${text ? `\n\nBILL TEXT:\n"""\n${text.slice(0, 14000)}\n"""` : ''}
+    prompt: `You are a meticulous UK energy-bill analyst extracting structured data for an energy broker. Extract ONLY ${pass.focus}, from the bill below.${hasImage ? ' The bill is attached as image(s) — read carefully, including small print, the boxed supply-number grid and the charges table.' : ''}
+
+Key UK-bill rules: the MPAN is 21 digits in two rows after a big "S" (top 8 = profile class + MTC + line-loss; bottom 13 = distributor 2 + unique 10 + check 1). MPRN is a single 6–10 digit run (gas), never after an "S" — don't confuse it with the account or invoice number. On two-rate bills the DAY rate is HIGHER than the NIGHT rate. Standing charge is p/DAY; unit rate is p/kWh. Unit rates & standing charges live in the detailed charges table (often page 2+), not the summary. Multi-site bills repeat the field set per supply point.${text ? `\n\nBILL TEXT:\n"""\n${text.slice(0, 16000)}\n"""` : ''}
 
 Return ONLY JSON in exactly this shape:
 {
@@ -546,6 +555,6 @@ Return ONLY JSON in exactly this shape:
 ${pass.keys.map((k) => `    "${k}": { "value": "", "source": "", "confidence": "" }`).join(',\n')}
   }
 }
-For EACH field: "value" = the clean extracted value (numbers only for rates/consumption — "24.50" not "24.50p/kWh"; a date as written on the bill); "source" = the EXACT verbatim text from the bill you took it from, quoted word-for-word so it can be located on the page; "confidence" = "high" | "medium" | "low". If a field genuinely isn't present on the bill, set its value and source to "". NEVER invent or guess a value — extract only what is actually shown.`,
+For EACH field: "value" = the clean extracted value (numbers only for rates/consumption/amounts — "24.50" not "24.50p/kWh"; a date as written); "source" = the EXACT verbatim text from the bill you took it from, quoted word-for-word so it can be located; "confidence" = "high" | "medium" | "low". If a field genuinely isn't present, set its value and source to "". NEVER invent or guess a value — extract only what is actually shown.`,
   };
 }

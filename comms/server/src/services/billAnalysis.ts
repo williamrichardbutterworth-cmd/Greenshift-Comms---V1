@@ -22,29 +22,41 @@ export async function analyzeBill(input: { text?: string; image?: { base64: stri
   const ai = getAI();
   const images = input.image ? [{ base64: input.image.base64, mime: input.image.mime ?? 'image/png' }] : undefined;
 
-  const runPass = async (pass: BillPass): Promise<BillField[]> => {
+  // A pass returns its fields, or null if it threw (truncated/malformed JSON, transport
+  // error). null is distinct from [] (ran fine, found nothing) so a total swarm failure
+  // can be reported as an error rather than masquerading as a clean empty result.
+  const runPass = async (pass: BillPass): Promise<BillField[] | null> => {
     try {
       const { system, prompt } = billPassPrompt(pass, input.text, !!images);
-      const raw = await ai.generateJSON<{ fields?: Record<string, unknown> }>({ system, prompt, maxTokens: 900, images });
+      const raw = await ai.generateJSON<{ fields?: Record<string, unknown> }>({ system, prompt, maxTokens: 1300, images });
       const f = (raw?.fields ?? {}) as Record<string, unknown>;
       const out: BillField[] = [];
       for (const k of pass.keys) {
         const o = (f[k] ?? {}) as Record<string, unknown>;
-        const value = str(o.value);
+        let value = str(o.value);
         if (!value) continue;
+        // MPAN/MPRN are pure digit strings — the model often keeps the bill's two-row
+        // visual gap (e.g. "…123456 7"); strip whitespace so the identifier is exact
+        // (it's used to match/auto-populate meters downstream).
+        if (k === 'mpan' || k === 'mprn') value = value.replace(/\s+/g, '');
         out.push({ key: k, value, source: str(o.source), confidence: conf(o.confidence) });
       }
       return out;
-    } catch {
-      return [];
+    } catch (e) {
+      console.warn(`[billAnalysis] pass "${pass.id}" failed: ${(e as Error).message}`);
+      return null;
     }
   };
 
   try {
     const results = await Promise.all(BILL_PASSES.map(runPass));
+    const anyFailed = results.some((r) => r === null);
     const seen = new Map<string, BillField>();
-    for (const fld of results.flat()) if (!seen.has(fld.key)) seen.set(fld.key, fld);
-    return { fields: [...seen.values()], provider: ai.name };
+    for (const fld of results.flat()) if (fld && !seen.has(fld.key)) seen.set(fld.key, fld);
+    const fields = [...seen.values()];
+    // Nothing extracted AND at least one pass errored → a real failure, not an empty bill.
+    if (!fields.length && anyFailed) return { fields: [], provider: 'error', error: 'Automatic analysis failed — please try again.' };
+    return { fields, provider: ai.name };
   } catch (e) {
     return { fields: [], provider: 'error', error: (e as Error).message };
   }

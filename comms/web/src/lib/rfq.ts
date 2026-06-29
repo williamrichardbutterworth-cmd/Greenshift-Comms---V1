@@ -121,6 +121,12 @@ export const RFQ_BIND: Record<string, RfqBind> = {
   contractEndDate: C('contractEnd'),
   electricMpan: { kind: 'derived', read: firstElecMpan },
   numberOfSites: { kind: 'derived', read: siteCountOf },
+  meterProfiled: { kind: 'derived', read: (i) => {
+    const m = metersOf(i).find((x) => x.type === 'electric' && ((x.meterType ?? '').trim() || (x.profileClass ?? '').trim()));
+    if (!m) return '';
+    const mt = (m.meterType ?? '').toLowerCase();
+    return (mt.includes('half') || m.profileClass === '00') ? 'HH (half-hourly)' : 'NHH';
+  } },
   loaInPlace: { kind: 'rfq', default: (i) => (hasLoaDrafted(i) ? 'Yes (LOA drafted)' : '') },
 };
 const bindOf = (key: string): RfqBind => RFQ_BIND[key] ?? { kind: 'rfq' };

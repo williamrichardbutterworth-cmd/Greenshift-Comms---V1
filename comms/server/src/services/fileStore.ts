@@ -34,6 +34,26 @@ export interface NewFile {
   dataBase64: string;
 }
 
+// Coalesce one ExcelJS cell value to plain text. ExcelJS represents non-trivial
+// cells as objects whose shape depends on the cell type — rich-text {richText:[…]},
+// hyperlink {text,hyperlink}, formula {formula,result}, error {error} — and dates as
+// native Date. A naive String(v) yields "[object Object]" for all but hyperlinks and a
+// noisy locale string for dates, which is exactly the data (totals, labels, bill dates)
+// the bill-analysis swarm needs. Handle each shape explicitly.
+function cellText(v: unknown): string {
+  if (v == null) return '';
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (Array.isArray(o.richText)) return (o.richText as Array<{ text?: string }>).map((r) => r.text ?? '').join('');
+    if ('text' in o) return String(o.text ?? '');     // hyperlink
+    if ('result' in o) return String(o.result ?? '');  // formula → computed value
+    if ('error' in o) return String(o.error ?? '');    // error cell (#DIV/0! etc.)
+    return '';
+  }
+  return String(v);
+}
+
 async function extractText(buffer: Buffer, mime: string, name: string): Promise<string> {
   const lower = name.toLowerCase();
   try {
@@ -45,7 +65,18 @@ async function extractText(buffer: Buffer, mime: string, name: string): Promise<
     if (mime.includes('wordprocessingml') || lower.endsWith('.docx')) {
       return ((await mammoth.extractRawText({ buffer })).value || '').slice(0, MAX_EXTRACT);
     }
-    if (mime.startsWith('text/') || /\.(txt|md|csv|log|vtt)$/.test(lower)) {
+    if (mime.includes('spreadsheetml') || /\.(xlsx|xlsm)$/.test(lower)) {
+      const ExcelJS = (await import('exceljs')).default;
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+      let out = '';
+      wb.eachSheet((sheet) => {
+        out += `# ${sheet.name}\n`;
+        sheet.eachRow((row) => { out += (row.values as unknown[]).slice(1).map(cellText).join(' | ') + '\n'; });
+      });
+      return out.slice(0, MAX_EXTRACT);
+    }
+    if (mime.startsWith('text/') || /\.(txt|md|csv|log|vtt|json|tsv)$/.test(lower)) {
       return buffer.toString('utf8').slice(0, MAX_EXTRACT);
     }
   } catch {
