@@ -1,13 +1,16 @@
 import type { ReportInputs, ClientMeter } from './api';
 
-// ── RFQ (Greenshift Lead Generation Form) field model ──
-// The internal qualification form handed to the pricing specialist. Mirrors the LOA
-// pattern: per-field value + provenance, seeded from the client record and refreshed
-// from conversations / the website, persisted on the client under inputs.rfq.
+// ── RFQ (Greenshift Lead Generation Form) — a BOUND VIEW over the client record ──
+// The RFQ is the end-result the whole app feeds. So it isn't a parallel copy: each field
+// is either (a) BOUND two-way to a canonical client-record field (edit it here, it updates
+// everywhere — one source of truth), (b) DERIVED read-only from the record (meters etc.),
+// or (c) an RFQ-only qualification answer stored on inputs.rfq (its canonical home). All
+// information gathered across the app (website, transcripts, bills, emails) lands on the
+// client record and surfaces here automatically.
 
-export type RfqSource = 'manual' | 'transcript' | 'website' | 'profile';
+export type RfqSource = 'manual' | 'transcript' | 'website' | 'profile' | 'na';
 export interface RfqFieldValue { value: string; source: RfqSource }
-export type RfqData = Record<string, RfqFieldValue>;
+export type RfqData = Record<string, RfqFieldValue>; // inputs.rfq — rfq-only answers + derived overrides
 
 export interface RfqField { key: string; question: string; hint?: string; multiline?: boolean }
 export interface RfqSection { title: string; fields: RfqField[] }
@@ -74,62 +77,119 @@ export const RFQ_SECTIONS: RfqSection[] = [
 
 export const RFQ_FIELDS: RfqField[] = RFQ_SECTIONS.flatMap((s) => s.fields);
 export const RFQ_FIELD_KEYS: string[] = RFQ_FIELDS.map((f) => f.key);
+export const rfqQuestion = (key: string): string => RFQ_FIELDS.find((f) => f.key === key)?.question ?? key;
+export const rfqIsMultiline = (key: string): boolean => !!RFQ_FIELDS.find((f) => f.key === key)?.multiline;
 
 export const RFQ_SOURCE_LABEL: Record<RfqSource, string> = {
-  manual: 'Manual', transcript: 'Conversation', website: 'Website', profile: 'Client',
+  manual: 'Manual', transcript: 'Conversation', website: 'Website', profile: 'Client', na: 'N/A',
 };
 
+// ── record helpers ──
+const field = (i: ReportInputs, k: string): string => String((i as Record<string, unknown>)[k] ?? '').trim();
+const metersOf = (i: ReportInputs): ClientMeter[] => Array.isArray((i as Record<string, unknown>).meters) ? ((i as Record<string, unknown>).meters as ClientMeter[]) : [];
+const rfqOf = (i: ReportInputs): RfqData => ((i as Record<string, unknown>).rfq as RfqData | undefined) ?? {};
 const looksEmail = (s: string) => /@/.test(s);
-const field = (inputs: ReportInputs, key: string): string => String((inputs as Record<string, unknown>)[key] ?? '').trim();
-const metersOf = (inputs: ReportInputs): ClientMeter[] => Array.isArray((inputs as Record<string, unknown>).meters) ? ((inputs as Record<string, unknown>).meters as ClientMeter[]) : [];
+const phoneOf = (i: ReportInputs) => field(i, 'telephone') || (!looksEmail(field(i, 'contact')) ? field(i, 'contact') : '');
+const emailOf = (i: ReportInputs) => field(i, 'email') || (looksEmail(field(i, 'contact')) ? field(i, 'contact') : '');
+const firstElecMpan = (i: ReportInputs) => (metersOf(i).find((m) => m.type === 'electric' && (m.mpan ?? '').trim())?.mpan ?? '').trim();
+const siteCountOf = (i: ReportInputs) => {
+  const n = new Set(metersOf(i).map((m) => (m.siteAddress ?? '').trim().toLowerCase()).filter(Boolean)).size;
+  if (n) return String(n);
+  const sites = field(i, 'sites');
+  return sites ? String(sites.split(';').filter((s) => s.trim()).length) : '';
+};
+export const hasLoaDrafted = (i: ReportInputs): boolean => {
+  const loa = (i as Record<string, unknown>).loa as Record<string, { value?: string }> | undefined;
+  return !!loa && Object.values(loa).some((v) => (v?.value ?? '').trim());
+};
 
-// Seed RFQ answers from the client record — the Basic Information block is filled
-// automatically; the qualification questions stay blank for the call. Saved inputs.rfq
-// values win (manual / transcript / website pulls aren't clobbered); profile-derived
-// fields refresh on re-entry so newly-gathered client data flows in (and un-derive if a
-// record field was cleared) — exactly the LOA ownership model.
-export function deriveRfqFromClient(inputs: ReportInputs): RfqData {
-  const saved = ((inputs as Record<string, unknown>).rfq as RfqData | undefined) ?? {};
-  const out: RfqData = { ...saved };
-  const put = (key: string, value: string | undefined) => {
-    const cur = out[key];
-    if (!value || !value.trim()) { if (cur?.source === 'profile') delete out[key]; return; }
-    if (cur?.value?.trim() && cur.source !== 'profile') return;
-    out[key] = { value: value.trim(), source: 'profile' };
-  };
-  const contact = field(inputs, 'contact');
-  const email = field(inputs, 'email') || (looksEmail(contact) ? contact : '');
-  const phone = field(inputs, 'telephone') || (!looksEmail(contact) ? contact : '');
-  const meters = metersOf(inputs);
-  const sites = new Set(meters.map((m) => (m.siteAddress ?? '').trim().toLowerCase()).filter(Boolean)).size;
-  const elec = meters.find((m) => m.type === 'electric' && (m.mpan ?? '').trim());
-  // earliest meter contract end, else the headline field
-  const meterEnd = meters.map((m) => (m.contractEnd ?? '').trim()).filter(Boolean)[0];
+// ── field bindings ──
+type RfqBind =
+  | { kind: 'client'; clientKey: string; read: (i: ReportInputs) => string }     // two-way to a flat client field
+  | { kind: 'derived'; read: (i: ReportInputs) => string }                       // read-only from the record (meters …); editable → rfq override
+  | { kind: 'rfq'; default?: (i: ReportInputs) => string };                      // canonical home on inputs.rfq
+const C = (clientKey: string): RfqBind => ({ kind: 'client', clientKey, read: (i) => field(i, clientKey) });
 
-  put('companyName', field(inputs, 'companyName'));
-  put('contactName', field(inputs, 'clientName'));
-  put('contactNumber', phone);
-  put('email', email);
-  put('businessType', field(inputs, 'industry'));
-  put('numberOfSites', sites ? String(sites) : (field(inputs, 'sites') ? String(field(inputs, 'sites').split(';').filter(Boolean).length) : ''));
-  put('estimatedConsumption', field(inputs, 'consumption'));
-  put('electricMpan', elec?.mpan ?? '');
-  put('currentSupplier', field(inputs, 'currentSupplier'));
-  put('contractEndDate', meterEnd || field(inputs, 'contractEnd'));
-  // LOA in place if a signed/drafted LOA exists on the record. Always call put (with ''
-  // when none) so a profile-derived 'Drafted' un-derives if the LOA is later cleared.
-  const loa = (inputs as Record<string, unknown>).loa as Record<string, { value?: string }> | undefined;
-  const hasLoa = !!loa && Object.values(loa).some((v) => (v?.value ?? '').trim());
-  put('loaInPlace', hasLoa ? 'Drafted' : '');
-  return out;
+export const RFQ_BIND: Record<string, RfqBind> = {
+  companyName: C('companyName'),
+  contactName: C('clientName'),
+  contactNumber: { kind: 'client', clientKey: 'telephone', read: phoneOf },
+  email: { kind: 'client', clientKey: 'email', read: emailOf },
+  businessType: C('industry'),
+  estimatedConsumption: C('consumption'),
+  currentSupplier: C('currentSupplier'),
+  contractEndDate: C('contractEnd'),
+  electricMpan: { kind: 'derived', read: firstElecMpan },
+  numberOfSites: { kind: 'derived', read: siteCountOf },
+  loaInPlace: { kind: 'rfq', default: (i) => (hasLoaDrafted(i) ? 'Yes (LOA drafted)' : '') },
+};
+const bindOf = (key: string): RfqBind => RFQ_BIND[key] ?? { kind: 'rfq' };
+
+export interface RfqFieldView { value: string; bound: boolean; derived: boolean; fromRecord: boolean; source?: RfqSource }
+// The displayed value + provenance for a field, resolved against the live client record.
+export function rfqFieldView(inputs: ReportInputs, key: string): RfqFieldView {
+  const b = bindOf(key);
+  if (b.kind === 'client') { const v = b.read(inputs); return { value: v, bound: true, derived: false, fromRecord: !!v, source: 'profile' }; }
+  const rfq = rfqOf(inputs);
+  if (b.kind === 'derived') {
+    const ov = rfq[key]?.value?.trim();
+    const dv = b.read(inputs);
+    return { value: ov || dv, bound: false, derived: true, fromRecord: !ov && !!dv, source: ov ? rfq[key]?.source : (dv ? 'profile' : undefined) };
+  }
+  const e = rfq[key];
+  const def = b.default?.(inputs) ?? '';
+  const own = e?.value?.trim();
+  return { value: own ? e.value : def, bound: false, derived: false, fromRecord: !own && !!def, source: own ? e?.source : (def ? 'profile' : undefined) };
 }
 
-export const rfqValues = (data: RfqData): Record<string, string> =>
-  Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v.value]));
+export const rfqAllValues = (inputs: ReportInputs): Record<string, string> =>
+  Object.fromEntries(RFQ_FIELDS.map((f) => [f.key, rfqFieldView(inputs, f.key).value]));
 
-export function rfqCompleteness(data: RfqData): { known: number; total: number; missing: string[] } {
-  const missing = RFQ_FIELDS.filter((f) => !data[f.key]?.value?.trim()).map((f) => f.key);
+export function rfqCompleteness(inputs: ReportInputs): { known: number; total: number; missing: string[] } {
+  const missing = RFQ_FIELDS.filter((f) => !rfqFieldView(inputs, f.key).value.trim()).map((f) => f.key);
   return { known: RFQ_FIELDS.length - missing.length, total: RFQ_FIELDS.length, missing };
+}
+export function sectionCompleteness(inputs: ReportInputs, section: RfqSection): { known: number; total: number } {
+  const known = section.fields.filter((f) => rfqFieldView(inputs, f.key).value.trim()).length;
+  return { known, total: section.fields.length };
+}
+
+// Write a single field — returns a NEW inputs object with the change routed to its canonical
+// home (the client record for bound fields; inputs.rfq otherwise). One mutation point so the
+// whole app stays in sync.
+export function setRfqField(inputs: ReportInputs, key: string, value: string, source: RfqSource = 'manual'): ReportInputs {
+  const b = bindOf(key);
+  const next = { ...inputs } as Record<string, unknown>;
+  if (b.kind === 'client') {
+    next[b.clientKey] = value;
+    // Keep the legacy combined `contact` field consistent — emailOf/phoneOf fall back to it,
+    // so without this a cleared email/phone would be resurrected from a stale `contact`.
+    if (b.clientKey === 'email' || b.clientKey === 'telephone') {
+      const email = (b.clientKey === 'email' ? value : String(next.email ?? '')).trim();
+      const tel = (b.clientKey === 'telephone' ? value : String(next.telephone ?? '')).trim();
+      next.contact = email || tel;
+    }
+    return next as ReportInputs;
+  }
+  const rfq: RfqData = { ...rfqOf(inputs) };
+  if (value.trim()) rfq[key] = { value, source }; else delete rfq[key];
+  next.rfq = rfq;
+  return next as ReportInputs;
+}
+
+// Apply an extracted field map (website / transcript) — bound fields enrich the client
+// record, answers land on inputs.rfq — without clobbering anything already captured.
+export function applyRfqExtract(inputs: ReportInputs, fields: Record<string, string>, source: RfqSource): { inputs: ReportInputs; filled: number } {
+  let next = inputs;
+  let filled = 0;
+  for (const [key, raw] of Object.entries(fields)) {
+    const v = (raw ?? '').trim();
+    if (!v || !RFQ_FIELD_KEYS.includes(key)) continue;          // ignore unknown keys
+    if (rfqFieldView(next, key).value.trim()) continue;         // don't overwrite an existing answer
+    next = setRfqField(next, key, v, source);
+    filled++;
+  }
+  return { inputs: next, filled };
 }
 
 export function rfqFilename(company: string): string {
@@ -156,16 +216,13 @@ export async function buildRfqDocx(values: Record<string, string>, meta: { compa
     borders: cellBorders,
     shading: opts.header ? { fill: 'F2F2F2' } : undefined,
     margins: { top: 60, bottom: 60, left: 90, right: 90 },
-    children: [new Paragraph({ children: [new TextRun({ text, bold: opts.bold || opts.header, color: opts.header ? INK : INK, size: 19 })] })],
+    children: [new Paragraph({ children: [new TextRun({ text, bold: opts.bold || opts.header, color: INK, size: 19 })] })],
   });
 
   const sectionBlocks = RFQ_SECTIONS.flatMap((section) => {
     const rows = [
       new TableRow({ tableHeader: true, children: [cell('Question', { header: true, width: 55 }), cell('Comments / Notes', { header: true, width: 45 })] }),
-      ...section.fields.map((f) => new TableRow({ children: [
-        cell(f.question, { width: 55 }),
-        cell((values[f.key] ?? '').trim(), { width: 45 }),
-      ] })),
+      ...section.fields.map((f) => new TableRow({ children: [cell(f.question, { width: 55 }), cell((values[f.key] ?? '').trim(), { width: 45 })] })),
     ];
     return [
       new Paragraph({ heading: HeadingLevel.HEADING_2, spacing: { before: 260, after: 100 }, children: [new TextRun({ text: section.title, bold: true, color: GREEN, size: 24 })] }),
@@ -180,16 +237,11 @@ export async function buildRfqDocx(values: Record<string, string>, meta: { compa
       properties: {},
       children: [
         new Paragraph({ heading: HeadingLevel.TITLE, children: [new TextRun({ text: 'Greenshift Lead Generation Form', bold: true, color: INK, size: 36 })] }),
-        new Paragraph({ spacing: { after: 40 }, children: [
-          new TextRun({ text: 'Internal use only — qualification record for the pricing specialist.', italics: true, color: MUTE, size: 18 }),
-        ] }),
-        new Paragraph({ spacing: { after: 160 }, children: [
-          new TextRun({ text: [meta.company && `Client: ${meta.company}`, meta.preparedBy && `Lead gen: ${meta.preparedBy}`, `Date: ${meta.date || new Date().toLocaleDateString('en-GB')}`].filter(Boolean).join('     '), color: MUTE, size: 18 }),
-        ] }),
+        new Paragraph({ spacing: { after: 40 }, children: [new TextRun({ text: 'Internal use only — qualification record for the pricing specialist.', italics: true, color: MUTE, size: 18 })] }),
+        new Paragraph({ spacing: { after: 160 }, children: [new TextRun({ text: [meta.company && `Client: ${meta.company}`, meta.preparedBy && `Lead gen: ${meta.preparedBy}`, `Date: ${meta.date || new Date().toLocaleDateString('en-GB')}`].filter(Boolean).join('     '), color: MUTE, size: 18 })] }),
         ...sectionBlocks,
       ],
     }],
   });
-  const blob = await Packer.toBlob(doc);
-  return blob;
+  return Packer.toBlob(doc);
 }
