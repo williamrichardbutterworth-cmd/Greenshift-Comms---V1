@@ -10,6 +10,7 @@ import { EmailsSection } from './components/EmailsSection';
 import { LoaSection } from './components/LoaSection';
 import { RfqSection } from './components/RfqSection';
 import { BillAnalysis } from './components/BillAnalysis';
+import { CalendarSection } from './components/CalendarSection';
 import { ClientTabBar } from './components/ClientTabBar';
 import { BackgroundTasksIndicator, BackgroundToasts } from './components/BackgroundTasks';
 import { AmbientBackground } from './components/AmbientBackground';
@@ -53,7 +54,7 @@ function Shell({ section, setSection, collapsed, onToggleCollapse }: {
   const activeClientId = tabs.activeClientId; // null on the Free tab
 
   // Client-work sections render wide; the market-intelligence sections stay capped.
-  const wide = ['report', 'emails', 'bills', 'loa', 'rfq', 'documents'].includes(section);
+  const wide = ['calendar', 'report', 'emails', 'bills', 'loa', 'rfq', 'documents'].includes(section);
 
   // "Open" on a finished background task → jump to its client + the relevant section.
   const onOpenTask = useCallback((task: BgTask) => {
@@ -82,6 +83,16 @@ function Shell({ section, setSection, collapsed, onToggleCollapse }: {
           {section === 'dashboard' && <Dashboard />}
           {section === 'brief' && <DailyReview />}
           {section === 'news' && <NewsFeed />}
+
+          {/* Calendar scopes to the active client (its detected commitments +
+              renewal markers) or shows the whole book on the Free tab. */}
+          {section === 'calendar' && (
+            <CalendarSection
+              key={activeClientId ?? 'free'}
+              clientId={activeClientId ?? undefined}
+              onOpenClient={(id, name) => { tabs.openClient(id, name); setSection('report'); }}
+            />
+          )}
 
           {section === 'report' && (activeClientId ? (
             <ClientHub

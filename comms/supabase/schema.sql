@@ -170,3 +170,40 @@ alter table public.forward_curves enable row level security;
 -- existing document_templates table picks them up on re-run.
 alter table public.document_templates add column if not exists report_kind text;
 alter table public.document_templates add column if not exists subtitle    text;
+
+
+-- ─────────────────────────── Calendar events ─────────────────────────────────
+-- Detected + manual calendar events behind the Calendar tab. A broker never types
+-- these in: detection mines the client timeline (transcripts/notes/emails) for
+-- forward commitments and writes provenance-backed rows here. Contract-end /
+-- renewal-window markers are NOT stored — the web app computes those live from
+-- each meter's contractEnd. `dedupe_key` is a deterministic provenance hash with a
+-- UNIQUE index, so re-running detection updates the same row instead of
+-- duplicating it. Detected events soft-delete (status 'dismissed', row kept) so a
+-- re-scan can't resurrect a dismissed item.
+create table if not exists public.calendar_events (
+  id                 uuid        primary key default gen_random_uuid(),
+  dedupe_key         text        not null,
+  title              text        not null default '',
+  start_at           timestamptz not null,
+  end_at             timestamptz,
+  all_day            boolean     not null default true,
+  kind               text        not null default 'manual',
+  origin             text        not null default 'manual',
+  status             text        not null default 'open'
+                                 check (status in ('open', 'done', 'dismissed', 'snoozed')),
+  client_profile_id  uuid,
+  meter_ref          text,
+  source             text,
+  source_activity_id text,
+  confidence         text,
+  note               text,
+  owner_id           text,
+  snoozed_until      timestamptz,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now()
+);
+create unique index if not exists calendar_events_dedupe_idx on public.calendar_events (dedupe_key);
+create index if not exists calendar_events_start_idx  on public.calendar_events (start_at);
+create index if not exists calendar_events_client_idx on public.calendar_events (client_profile_id);
+alter table public.calendar_events enable row level security;

@@ -440,6 +440,24 @@ export interface EmailMsg { direction: 'in' | 'out'; subject?: string; body: str
 export interface EmailDraft { subject: string; body: string; provider: string; error?: string; }
 export interface EmailDraftPayload { inputs: ReportInputs; history: EmailMsg[]; mode: 'reply' | 'follow-up'; instruction?: string; angles?: string[]; }
 
+// ── Calendar (detected commitments + manual events) ──
+// Detected events are mined from the client timeline with a verbatim `source`
+// quote; contract-end / renewal markers are computed live in the browser (see
+// lib/calendarDates) and never live here.
+export type CalendarKind = 'callback' | 'deadline' | 'our-action' | 'manual';
+export type CalendarStatus = 'open' | 'done' | 'dismissed' | 'snoozed';
+export type CalendarOrigin = 'detected' | 'manual';
+export interface CalendarEvent {
+  id: string; dedupeKey: string; title: string; start: string; end?: string | null;
+  allDay: boolean; kind: CalendarKind; origin: CalendarOrigin; status: CalendarStatus;
+  clientProfileId?: string | null; meterRef?: string | null; source?: string | null;
+  sourceActivityId?: string | null; confidence?: 'high' | 'medium' | 'low' | null; note?: string | null;
+  ownerId?: string | null; snoozedUntil?: string | null; createdAt: string; updatedAt: string;
+}
+export interface NewCalendarEvent { title: string; start: string; end?: string | null; allDay?: boolean; kind?: CalendarKind; clientProfileId?: string | null; note?: string | null; }
+export interface CalendarPatch { title?: string; start?: string; end?: string | null; allDay?: boolean; status?: CalendarStatus; note?: string | null; snoozedUntil?: string | null; }
+export interface CalendarScanResult { events: CalendarEvent[]; provider: string; error?: string; stats?: { segments: number; raw: number; kept: number }; }
+
 export const api = {
   market: () => j<MarketSnapshot>('/api/market'),
   grid: () => j<GridSnapshot>('/api/grid'),
@@ -552,6 +570,19 @@ export const api = {
   bill: {
     analyze: (input: { text?: string; image?: { base64: string; mime?: string } }) =>
       j<BillAnalysisResult>('/api/bill/analyze', postJson(input)),
+  },
+
+  // Calendar — detected commitments + manual events. `scan` mines one client's
+  // timeline and upserts idempotently (safe to re-run).
+  calendar: {
+    list: (clientProfileId?: string) =>
+      j<CalendarEvent[]>(`/api/calendar${clientProfileId ? `?clientProfileId=${encodeURIComponent(clientProfileId)}` : ''}`),
+    get: (id: string) => j<CalendarEvent>(`/api/calendar/${id}`),
+    create: (input: NewCalendarEvent) => j<CalendarEvent>('/api/calendar', postJson(input)),
+    scan: (clientProfileId: string) => j<CalendarScanResult>(`/api/calendar/scan/${clientProfileId}`, { method: 'POST' }),
+    update: (id: string, patch: CalendarPatch) =>
+      j<CalendarEvent>(`/api/calendar/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }),
+    remove: (id: string) => j<{ ok: boolean; tombstoned: boolean }>(`/api/calendar/${id}`, { method: 'DELETE' }),
   },
 
   // Mine a pasted call transcript for client details.
