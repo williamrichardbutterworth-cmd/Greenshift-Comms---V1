@@ -8,12 +8,16 @@ import { useClientTabs } from '../workspace/ClientTabsContext';
 // The Emails section. With a client tab active it shows that client's dialogue
 // (lifted out of the client hub). On the Free tab it's a picker — choose a client
 // and it opens as a tab, scoping every section to them.
-export function EmailsSection({ clientId }: { clientId: string | null }) {
-  if (clientId) return <ClientEmails key={clientId} clientId={clientId} />;
+export function EmailsSection({ clientId, autoDraftFor, onAutoDraftDone }: {
+  clientId: string | null;
+  autoDraftFor?: string | null;
+  onAutoDraftDone?: () => void;
+}) {
+  if (clientId) return <ClientEmails key={clientId} clientId={clientId} autoDraft={autoDraftFor === clientId} onAutoDraftDone={onAutoDraftDone} />;
   return <EmailsPicker />;
 }
 
-function ClientEmails({ clientId }: { clientId: string }) {
+function ClientEmails({ clientId, autoDraft, onAutoDraftDone }: { clientId: string; autoDraft?: boolean; onAutoDraftDone?: () => void }) {
   const [client, setClient] = useState<ClientProfile | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -44,7 +48,7 @@ function ClientEmails({ clientId }: { clientId: string }) {
           <p className="text-sm text-brand-muted">The full conversation, with AI-drafted next emails &amp; replies grounded in the thread and this client&rsquo;s talk track.</p>
         </div>
       </div>
-      <EmailThread client={client} inputs={inputs} angles={angles} logActivity={logActivity} />
+      <EmailThread client={client} inputs={inputs} angles={angles} logActivity={logActivity} autoDraft={autoDraft} onAutoDraftDone={onAutoDraftDone} />
       {err && <p className="text-sm text-up" role="alert">{err}</p>}
     </div>
   );

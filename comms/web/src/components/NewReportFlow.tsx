@@ -25,9 +25,8 @@ function recommendTemplate(client: ClientProfile | null): { id: string; reason: 
 }
 
 // A request to start a new report. `templateId` preselects the template;
-// `profileId` is the client it's for (the active client tab). (seedAngles kept for
-// call-site compatibility.)
-export interface NewDocRequest { profileId?: string; templateId?: string; seedAngles?: string[] }
+// `profileId` is the client it's for (the active client tab).
+export interface NewDocRequest { profileId?: string; templateId?: string }
 
 // The "new report" flow: ONE step — pick a template; the report is created for the
 // active client (request.profileId), so there's no "who is this for?" selector.

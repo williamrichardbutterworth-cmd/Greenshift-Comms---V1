@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback } from 'react';
+import { lazy, Suspense, useCallback, useState } from 'react';
 import { Sidebar, SECTION_LABEL, type Tab } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { DailyReview } from './components/DailyReview';
@@ -52,6 +52,9 @@ function Shell({ section, setSection, collapsed, onToggleCollapse }: {
   const ws = useWorkspace();
   const tabs = useClientTabs();
   const activeClientId = tabs.activeClientId; // null on the Free tab
+  // "Draft follow-up" from the client hub opens the client's Emails and auto-drafts a
+  // follow-up there (one-shot — cleared once consumed so navigation never re-fires it).
+  const [pendingEmailDraft, setPendingEmailDraft] = useState<string | null>(null);
 
   // Client-work sections render wide; the market-intelligence sections stay capped.
   const wide = ['calendar', 'report', 'emails', 'bills', 'loa', 'rfq', 'documents'].includes(section);
@@ -100,7 +103,7 @@ function Shell({ section, setSection, collapsed, onToggleCollapse }: {
               clientId={activeClientId}
               onBack={() => tabs.goFree()}
               onStartDocument={(client, templateId) => ws.requestNewDoc({ profileId: client.id, templateId })}
-              onDraftFromAngles={(client, angles) => ws.requestNewDoc({ profileId: client.id, templateId: 'builtin-post-call-followup', seedAngles: angles })}
+              onDraftFromAngles={(client) => { tabs.openClient(client.id, client.name); setPendingEmailDraft(client.id); setSection('emails'); }}
               onOpenProject={(id) => ws.openDocById(id)}
               onOpenLoa={() => setSection('loa')}
               onOpenRfq={() => setSection('rfq')}
@@ -112,7 +115,7 @@ function Shell({ section, setSection, collapsed, onToggleCollapse }: {
 
           {/* Keyed by the active client so switching client context remounts cleanly
               (no stale selection from the previous client / Free). */}
-          {section === 'emails' && <EmailsSection clientId={activeClientId} />}
+          {section === 'emails' && <EmailsSection clientId={activeClientId} autoDraftFor={pendingEmailDraft} onAutoDraftDone={() => setPendingEmailDraft(null)} />}
           {section === 'bills' && <BillAnalysis key={activeClientId ?? 'free'} initialClientId={activeClientId ?? undefined} />}
           {section === 'loa' && <LoaSection key={activeClientId ?? 'free'} initialClientId={activeClientId ?? undefined} onExit={activeClientId ? () => setSection('report') : undefined} />}
           {section === 'rfq' && <RfqSection key={activeClientId ?? 'free'} initialClientId={activeClientId ?? undefined} onExit={activeClientId ? () => setSection('report') : undefined} />}

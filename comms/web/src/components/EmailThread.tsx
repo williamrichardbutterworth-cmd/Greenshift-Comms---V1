@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Mail, Send, Sparkles, Loader2, Copy, Check, Reply, Inbox, PenLine } from 'lucide-react';
 import { api, type ClientProfile, type ClientActivity, type ReportInputs, type EmailMsg, type ActivityType } from '../lib/api';
 import { relativeTime } from '../lib/crm';
@@ -14,11 +14,14 @@ const msgOf = (a: ClientActivity): EmailMsg => ({
 
 // Per-client email dialogue: the conversation history as a thread, plus AI-drafted
 // next emails/replies grounded in the conversation + the client's talk-track angles.
-export function EmailThread({ client, inputs, angles, logActivity }: {
+export function EmailThread({ client, inputs, angles, logActivity, autoDraft, onAutoDraftDone }: {
   client: ClientProfile;
   inputs: ReportInputs;
   angles: string[];
   logActivity: LogActivity;
+  /** When arriving via the hub's "Draft follow-up", auto-generate a follow-up once. */
+  autoDraft?: boolean;
+  onAutoDraftDone?: () => void;
 }) {
   // Oldest → newest, only the email activities.
   const thread = useMemo<EmailMsg[]>(
@@ -48,6 +51,17 @@ export function EmailThread({ client, inputs, angles, logActivity }: {
     } catch (e) { setErr(String((e as Error).message)); }
     finally { setBusy(false); }
   };
+
+  // Arriving from the hub's "Draft follow-up" → kick off a follow-up draft once.
+  const autoDraftedRef = useRef(false);
+  useEffect(() => {
+    if (autoDraft && !autoDraftedRef.current) {
+      autoDraftedRef.current = true;
+      setTab('draft');
+      void draft('follow-up');
+      onAutoDraftDone?.();
+    }
+  }, [autoDraft]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const copyDraft = async () => {
     try { await navigator.clipboard.writeText((subject ? `Subject: ${subject}\n\n` : '') + body); setCopied(true); setTimeout(() => setCopied(false), 1500); }
