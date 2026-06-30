@@ -18,7 +18,7 @@ export interface ClientIntake {
   meters: ClientMeter[];
   services: string[];
   companySummary: string;
-  summary: string; points: string[]; angles: string[]; suggestedMilestones: string[];
+  summary: string; points: string[]; angles: string[]; rapport: string[]; suggestedMilestones: string[];
   websiteUrl: string;
   provider: string; error?: string;
 }
@@ -43,7 +43,7 @@ const EMPTY: ClientIntake = {
   companyName: '', registeredNo: '', businessAddress: '', postcode: '', industry: '',
   contactName: '', position: '', email: '', telephone: '',
   fuel: '', currentSupplier: '', contractEnd: '', consumption: '',
-  meters: [], services: [], companySummary: '', summary: '', points: [], angles: [], suggestedMilestones: [],
+  meters: [], services: [], companySummary: '', summary: '', points: [], angles: [], rapport: [], suggestedMilestones: [],
   websiteUrl: '', provider: 'none',
 };
 
@@ -85,7 +85,7 @@ export async function clientIntake(input: {
       meters: coerceMeters(r.meters),
       services: strList(r.services, 8),
       companySummary: str(r.companySummary).slice(0, 800),
-      summary: str(r.summary), points: strList(r.points, 12), angles: strList(r.angles, 6),
+      summary: str(r.summary), points: strList(r.points, 12), angles: strList(r.angles, 6), rapport: strList(r.rapport, 4),
       suggestedMilestones: strList(r.suggestedMilestones, 6).filter((m) => MILESTONE_KEYS.includes(m)),
       websiteUrl,
       provider: ai.name,

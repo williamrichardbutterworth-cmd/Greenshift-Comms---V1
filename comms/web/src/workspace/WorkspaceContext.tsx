@@ -4,8 +4,12 @@ import { NewReportFlow, type NewDocRequest } from '../components/NewReportFlow';
 
 // One open document = one session. The session caches the project (with its latest
 // doc/inputs/context) so switching tabs re-seeds the studio without a refetch and
-// without losing edits (the studio flushes into the session on unmount).
-export interface DocSession { id: string; project: ReportProject }
+// without losing edits (the studio flushes into the session on unmount). `clientId`
+// is the owning client (from the report's bound clientProfileId) so the Reports
+// section can scope the tab strip to the active client.
+export interface DocSession { id: string; project: ReportProject; clientId?: string }
+
+const ownerOf = (project: ReportProject): string | undefined => project.inputs?.clientProfileId || undefined;
 
 interface WorkspaceValue {
   order: string[];
@@ -42,7 +46,7 @@ export function WorkspaceProvider({ children, onNavigateToDocuments }: {
   useEffect(() => { orderRef.current = order; }, [order]);
 
   const openDoc = useCallback((project: ReportProject) => {
-    setSessions((s) => ({ ...s, [project.id]: { id: project.id, project } }));
+    setSessions((s) => ({ ...s, [project.id]: { id: project.id, project, clientId: ownerOf(project) } }));
     setOrder((o) => (o.includes(project.id) ? o : [...o, project.id]));
     setActiveId(project.id);
     onNavigateToDocuments();
@@ -59,7 +63,7 @@ export function WorkspaceProvider({ children, onNavigateToDocuments }: {
   // Refresh a session's cached project (called by the studio after save / on flush)
   // — only if still open, so a closed doc isn't resurrected by a late save.
   const updateProject = useCallback((project: ReportProject) => {
-    setSessions((s) => (s[project.id] ? { ...s, [project.id]: { id: project.id, project } } : s));
+    setSessions((s) => (s[project.id] ? { ...s, [project.id]: { id: project.id, project, clientId: ownerOf(project) } } : s));
   }, []);
 
   const closeDoc = useCallback((id: string) => {

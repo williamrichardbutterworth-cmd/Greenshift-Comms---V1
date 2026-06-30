@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, Download, CheckCircle2, Circle, ShieldCheck,
-  FileSignature, X, RotateCcw,
+  FileSignature, X, RotateCcw, Check, MapPin,
 } from 'lucide-react';
 import { api, type ClientProfile, type ReportInputs, type ChCompanySummary } from '../lib/api';
 import {
@@ -74,12 +74,15 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
     return d;
   });
   const [layout, setLayout] = useState<Layout>(() => ((inputs as Record<string, unknown>).loaLayout as Layout | undefined) ?? {});
-  const [busy, setBusy] = useState<null | 'convos' | 'ch' | 'gen' | 'save'>(null);
+  const [busy, setBusy] = useState<null | 'ch' | 'gen' | 'save'>(null);
+  const [reading, setReading] = useState(false); // background "read from conversations" status (now automatic)
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [chOpen, setChOpen] = useState(false);
-  const [chResults, setChResults] = useState<ChCompanySummary[] | null>(null);
+  const [chResults, setChResults] = useState<ChCompanySummary[] | null>(null); // ranked, best match first
+  const [sameSite, setSameSite] = useState(false); // also copy the registered office into Site address(es)
   const [note, setNote] = useState<string | null>(null);
+  const readRef = useRef<string | null>(null); // guard: auto-read conversations once per client open
   // The freshest full inputs to persist onto (so saving the LOA doesn't roll back
   // profile data gathered since this client was last listed). Seeded from the prop,
   // replaced by the on-entry refetch below.
@@ -91,7 +94,7 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
   // including any edit in flight when the refetch lands.
   useEffect(() => {
     let cancelled = false;
-    api.profiles.get(client.id).then((fresh) => {
+    api.profiles.get(client.id).then(async (fresh) => {
       if (cancelled) return;
       const fi = fresh.inputs as ReportInputs;
       freshInputs.current = fi;
@@ -103,9 +106,25 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
         return next;
       });
       setLayout(((fi as Record<string, unknown>).loaLayout as Layout | undefined) ?? {});
+
+      // Automatically read the client's logged conversations to fill any LOA blanks —
+      // this replaces the old manual "Read from conversations" button. Runs once per
+      // open, only when fields are still missing, and fills blanks ONLY (never
+      // clobbers manual / Companies House / already-known values).
+      if (readRef.current === client.id) return;
+      readRef.current = client.id;
+      const text = (fresh.activities ?? [])
+        .filter((a) => ['transcript', 'note', 'email-received', 'email-sent'].includes(a.type))
+        .map((a) => [a.title, a.detail].filter(Boolean).join('\n')).join('\n\n');
+      if (text.trim() && loaCompleteness(d).missing.length) {
+        setReading(true);
+        const res = await api.loa.extract(text, loaValues(d)).catch(() => null);
+        if (!cancelled && res && (!res.error || res.provider === 'claude' || res.provider === 'openai')) mergeFields(res.fields, 'transcript');
+        if (!cancelled) setReading(false);
+      }
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [client.id]);
+  }, [client.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { known, total, missing } = useMemo(() => loaCompleteness(loa), [loa]);
 
@@ -143,31 +162,36 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
   };
   const save = () => persist(loa, layout);
 
-  const readFromConvos = async () => {
-    const text = client.activities
-      .filter((a) => ['transcript', 'note', 'email-received', 'email-sent'].includes(a.type))
-      .map((a) => [a.title, a.detail].filter(Boolean).join('\n')).join('\n\n');
-    if (!text.trim()) { setNote('No conversations logged for this client yet.'); return; }
-    setBusy('convos'); setErr(null); setNote(null);
-    try {
-      const res = await api.loa.extract(text, loaValues(loa));
-      if (res.error && res.provider !== 'claude' && res.provider !== 'openai') setErr(res.error);
-      else { mergeFields(res.fields, 'transcript'); setNote(`Read ${Object.keys(res.fields).length} field(s) from conversations.`); }
-    } catch (e) { setErr(String((e as Error).message)); }
-    finally { setBusy(null); }
+  // Rank search results so the most likely company surfaces first: title match
+  // (exact > prefix > contains), then prefer an active company.
+  const rankCh = (items: ChCompanySummary[], q: string): ChCompanySummary[] => {
+    const norm = (s: string) => s.toLowerCase().replace(/\b(ltd|limited|plc|llp|llc|co|company|the|uk)\b/g, '').replace(/[^a-z0-9]/g, '');
+    const nq = norm(q);
+    return [...items]
+      .map((c) => {
+        const nc = norm(c.title);
+        let score = nq && nc === nq ? 100 : nq && (nc.startsWith(nq) || nq.startsWith(nc)) ? 60 : nq && (nc.includes(nq) || nq.includes(nc)) ? 30 : 0;
+        if (c.status === 'active') score += 10;
+        return { c, score };
+      })
+      .sort((a, b) => b.score - a.score)
+      .map((x) => x.c);
   };
 
   const chSearch = async () => {
     const q = loa.customerName?.value || client.name;
-    setBusy('ch'); setErr(null); setChResults(null); setChOpen(true);
+    setBusy('ch'); setErr(null); setChResults(null); setSameSite(false); setChOpen(true);
     try {
       const res = await api.loa.chSearch(q);
       if (res.error) setErr(res.error);
-      setChResults(res.items);
+      setChResults(rankCh(res.items, q));
     } catch (e) { setErr(String((e as Error).message)); }
     finally { setBusy(null); }
   };
-  const applyCh = async (companyNumber: string) => {
+  // Apply a chosen company. Registered office → Business address ALWAYS; copy it
+  // into Site address(es) ONLY when the operator confirms it's the same site (the
+  // registered office is often an accountant's address, not the supply site).
+  const applyCh = async (companyNumber: string, alsoSite: boolean) => {
     setBusy('ch'); setErr(null);
     try {
       const res = await api.loa.chCompany(companyNumber);
@@ -180,6 +204,7 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
           registeredNo: { value: c.companyNumber, source: 'companiesHouse' },
           businessAddress: { value: c.registeredAddress, source: 'companiesHouse' },
           ...(c.postcode ? { postcode: { value: c.postcode, source: 'companiesHouse' as LoaSource } } : {}),
+          ...(alsoSite && c.registeredAddress ? { siteAddresses: { value: c.registeredAddress, source: 'companiesHouse' as LoaSource } } : {}),
         }));
         setNote(`Verified against Companies House — ${c.status}.`);
       }
@@ -202,6 +227,9 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
     finally { setBusy(null); }
   };
 
+  const chBest = chResults && chResults.length ? chResults[0] : null;
+  const chOthers = chResults ? chResults.slice(1) : [];
+
   return (
     <div className="max-w-[1240px] mx-auto space-y-4">
       <button className="btn-ghost !py-1.5 !px-2" onClick={onBack}><ArrowLeft size={15} /> All clients</button>
@@ -213,14 +241,14 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
             <span className="grid place-items-center h-11 w-11 rounded-xl bg-brand-green/15 text-brand-greenDark shrink-0"><FileSignature size={20} /></span>
             <div className="min-w-0">
               <h2 className="text-lg font-semibold truncate">{client.name}</h2>
-              <div className="text-sm text-brand-muted">Letter of Authority · {known}/{total} details{missing.length ? '' : ' — ready to export'}</div>
+              <div className="text-sm text-brand-muted flex items-center gap-2 flex-wrap">
+                <span>Letter of Authority · {known}/{total} details{missing.length ? '' : ' — ready to export'}</span>
+                {reading && <span className="text-[11px] text-brand-greenDark inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> reading conversations…</span>}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button className="btn-ghost !py-1.5" onClick={readFromConvos} disabled={busy === 'convos'} title="Pull LOA details from this client's logged conversations">
-              {busy === 'convos' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Read from conversations
-            </button>
-            <button className="btn-ghost !py-1.5" onClick={chSearch} disabled={busy === 'ch'} title="Verify against Companies House">
+            <button className="btn-ghost !py-1.5" onClick={chSearch} disabled={busy === 'ch'} title="Find &amp; verify against Companies House">
               {busy === 'ch' ? <Loader2 size={15} className="animate-spin" /> : <ShieldCheck size={15} />} Companies House
             </button>
             <button className="btn-primary !py-1.5" onClick={generate} disabled={busy === 'gen'}>
@@ -305,30 +333,55 @@ function LoaBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
         </section>
       </div>
 
-      {/* Companies House results */}
+      {/* Companies House — find & verify, with the most likely match surfaced for a quick check */}
       {chOpen && (
         <div className="fixed inset-0 z-30 bg-brand-ink/40 grid place-items-center p-4" onClick={() => setChOpen(false)}>
-          <div className="card w-full max-w-lg max-h-[80vh] overflow-auto p-5" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
+          <div className="card w-full max-w-lg max-h-[85vh] overflow-auto p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-1">
               <h3 className="text-base font-semibold flex items-center gap-2"><ShieldCheck size={17} className="text-brand-greenDark" /> Companies House</h3>
               <button className="btn-ghost !px-1.5 !py-1" onClick={() => setChOpen(false)}><X size={16} /></button>
             </div>
-            {busy === 'ch' && !chResults ? <p className="text-sm text-brand-muted">Searching…</p>
-              : chResults && chResults.length ? (
-                <div className="space-y-1.5">
-                  {chResults.map((c) => (
-                    <button key={c.companyNumber} onClick={() => applyCh(c.companyNumber)} className="w-full text-left card p-3 hover:bg-brand-tint transition">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm flex-1 truncate">{c.title}</span>
-                        <span className={'text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ' + (c.status === 'active' ? 'bg-brand-green/15 text-brand-greenDark' : 'bg-up/10 text-up')}>{c.status}</span>
-                      </div>
-                      <div className="text-xs text-brand-muted mt-0.5">No. {c.companyNumber} · {c.addressSnippet}</div>
-                    </button>
-                  ))}
+            <p className="text-[12px] text-brand-muted mb-3">Check the highlighted match and apply it — the registered address fills the LOA’s <b>Business address</b>.</p>
+
+            {busy === 'ch' && !chResults ? (
+              <p className="text-sm text-brand-muted flex items-center gap-2"><Loader2 size={15} className="animate-spin" /> Searching…</p>
+            ) : chBest ? (
+              <>
+                <div className="rounded-xl border-2 border-brand-green/45 bg-brand-tint/50 p-4">
+                  <div className="text-[10px] uppercase tracking-wide text-brand-greenDark font-medium flex items-center gap-1 mb-1.5"><Sparkles size={12} /> Most likely match</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-[15px] flex-1 truncate">{chBest.title}</span>
+                    <span className={'text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ' + (chBest.status === 'active' ? 'bg-brand-green/15 text-brand-greenDark' : 'bg-up/10 text-up')}>{chBest.status}</span>
+                  </div>
+                  <div className="text-xs text-brand-muted mt-1">No. {chBest.companyNumber}{chBest.type ? ` · ${chBest.type}` : ''}{chBest.incorporatedOn ? ` · inc. ${chBest.incorporatedOn}` : ''}</div>
+                  <div className="text-xs text-brand-ink mt-1.5 flex items-start gap-1.5"><MapPin size={13} className="text-brand-muted mt-0.5 shrink-0" /><span>{chBest.addressSnippet || '—'}</span></div>
+                  <label className="flex items-start gap-2 mt-3 text-[12px] text-brand-ink cursor-pointer">
+                    <input type="checkbox" checked={sameSite} onChange={(e) => setSameSite(e.target.checked)} className="mt-0.5 accent-brand-green" />
+                    <span>The registered office is also the supply site — copy it into <b>Site address(es)</b> too. <span className="text-brand-muted">Leave off if the site is different.</span></span>
+                  </label>
+                  <button onClick={() => applyCh(chBest.companyNumber, sameSite)} className="btn-primary w-full justify-center mt-3" disabled={busy === 'ch'}>{busy === 'ch' ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Use this company</button>
                 </div>
-              ) : (
-                <p className="text-sm text-brand-muted">{err ? '' : 'No matching companies found. Companies House lookup needs an API key (COMPANIES_HOUSE_API_KEY) for live results.'}</p>
-              )}
+
+                {chOthers.length > 0 && (
+                  <div className="mt-4">
+                    <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">Other matches</div>
+                    <div className="space-y-1.5">
+                      {chOthers.map((c) => (
+                        <button key={c.companyNumber} onClick={() => applyCh(c.companyNumber, sameSite)} disabled={busy === 'ch'} className="w-full text-left rounded-lg border border-brand-line p-2.5 hover:bg-brand-tint transition disabled:opacity-60">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-sm flex-1 truncate">{c.title}</span>
+                            <span className={'text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ' + (c.status === 'active' ? 'bg-brand-green/15 text-brand-greenDark' : 'bg-up/10 text-up')}>{c.status}</span>
+                          </div>
+                          <div className="text-[11px] text-brand-muted mt-0.5 truncate">No. {c.companyNumber} · {c.addressSnippet}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-brand-muted">{err ? '' : 'No matching companies found. Companies House lookup needs an API key (COMPANIES_HOUSE_API_KEY) for live results.'}</p>
+            )}
             {err && <p className="text-sm text-up mt-2">{err}</p>}
           </div>
         </div>

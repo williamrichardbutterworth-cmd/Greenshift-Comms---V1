@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReceiptText, UploadCloud, Loader2, Building2, Check, X, FileText, Sparkles,
-  CheckCircle2, AlertCircle, Gauge, Plus, ArrowLeft, ScanLine,
+  CheckCircle2, AlertCircle, Gauge, Plus, ArrowLeft, ScanLine, Circle,
 } from 'lucide-react';
 import { api, type ClientProfile, type ClientFile, type ClientMeter, type BillField, type BillAnalysisResult, type ReportInputs } from '../lib/api';
 import { getMeters, meterLabel } from '../lib/clientProfile';
@@ -86,6 +86,7 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
   const [step, setStep] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [doneMsg, setDoneMsg] = useState('');
+  const [dragOver, setDragOver] = useState(false);
   const markRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => { api.profiles.list().then(setClients).catch(() => {}); }, []);
@@ -115,6 +116,13 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
       setPhase('review'); hydratedRef.current = billTask.id; hydratedClientRef.current = billTask.clientId ?? clientId;
     }
   }, [billTask?.id, billTask?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // If the background extraction ERRORS, drop the scan view back to setup so the
+  // error + dismiss surfaces (the failing task already removed the file server-side).
+  // Without this, phase stays 'analyzing' and the UI falls through to an empty review.
+  useEffect(() => {
+    if (billTask?.status === 'error' && phase === 'analyzing') { setPhase('setup'); setUploaded(null); }
+  }, [billTask?.status, billTask?.id, phase]);
 
   // Switching the client picker must NOT carry a hydrated review onto another client
   // (it would approve client A's bill onto B). Tear the review down; the old task keeps
@@ -154,6 +162,9 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
         return;
       }
       const fileType = file.type;
+      // Keep the uploaded file on screen so the "analysing" view can show the bill
+      // with a scanning overlay while extraction runs (the done-effect re-hydrates it).
+      setUploaded(saved); setPhase('analyzing');
       bg.run<BillAnalysisResult>({
         kind: 'bill',
         label: `Bill analysis — ${file.name}`,
@@ -161,13 +172,19 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
         clientName: client.name,
         payload: { meterChoice, uploaded: saved },
         fn: async () => {
-          const res = await api.bill.analyze({ text: extracted || undefined, image: isImage(fileType) ? { base64, mime: fileType } : undefined });
+          let res: BillAnalysisResult;
+          try {
+            res = await api.bill.analyze({ text: extracted || undefined, image: isImage(fileType) ? { base64, mime: fileType } : undefined });
+          } catch (e) {
+            api.files.remove(saved.id).catch(() => {}); // don't orphan the upload on a transport failure
+            throw e;
+          }
           const failed = (res.error && res.provider !== 'claude' && res.provider !== 'openai') || !res.fields.length;
           if (failed) { api.files.remove(saved.id).catch(() => {}); throw new Error(res.error || 'No fields could be read from this bill — try a clearer scan or a PDF with selectable text.'); }
           return res;
         },
       });
-      setFile(null); setMeterChoice(''); setUploaded(null);
+      setFile(null); setMeterChoice('');
     } catch (e) {
       setErr(String((e as Error).message));
     }
@@ -270,6 +287,55 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
     </div>
   );
 
+  // ── analysing: show the uploaded bill with a green scanning sweep while extracting ──
+  if (taskRunning && uploaded) {
+    return (
+      <div className="space-y-3">
+        {header}
+        <div className="grid lg:grid-cols-2 gap-4 items-start">
+          {/* The bill, with the scan overlay */}
+          <section className="card p-0 overflow-hidden lg:sticky lg:top-[calc(var(--topbar-h)+12px)]">
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-brand-line">
+              <ScanLine size={15} className="text-brand-green shrink-0" />
+              <h3 className="text-sm font-semibold flex-1 truncate">{uploaded.name}</h3>
+              <span className="text-[11px] text-brand-greenDark">Scanning…</span>
+            </div>
+            <div className="relative h-[calc(100vh-var(--topbar-h)-150px)] min-h-[460px] bg-[#f4f3f0]">
+              {isImage(uploaded.mime)
+                ? <div className="h-full overflow-auto p-3"><img src={api.files.downloadUrl(uploaded.id)} alt="bill" className="w-full rounded shadow-sm" /></div>
+                : <iframe src={api.files.downloadUrl(uploaded.id)} title="bill" className="w-full h-full border-0" />}
+              {/* green scanning sweep (sits over the preview, never blocks it) */}
+              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                <div className="absolute inset-x-0 top-0 h-28 animate-scan" style={{ background: 'linear-gradient(to bottom, rgba(64,168,0,0) 0%, rgba(64,168,0,0.12) 75%, rgba(64,168,0,0.26) 100%)' }} />
+                <div className="absolute inset-x-0 top-28 h-[2px] animate-scan bg-brand-green" style={{ boxShadow: '0 0 14px 3px rgba(64,168,0,0.55)' }} />
+              </div>
+            </div>
+          </section>
+
+          {/* Live extraction steps */}
+          <section className="card p-5 lg:sticky lg:top-[calc(var(--topbar-h)+12px)]">
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className="grid place-items-center h-9 w-9 rounded-lg bg-brand-tint text-brand-greenDark shrink-0"><Loader2 size={17} className="animate-spin" /></span>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">Analysing the bill</div>
+                <p className="text-[12px] text-brand-muted truncate">Reading {client?.name ? `${client.name}’s` : 'the'} bill into the record.</p>
+              </div>
+            </div>
+            <ol className="space-y-2">
+              {ANALYSING_STEPS.map((s, i) => (
+                <li key={i} className={'flex items-center gap-2 text-sm transition ' + (i < step ? 'text-brand-muted' : i === step ? 'text-brand-ink font-medium' : 'text-brand-muted/40')}>
+                  {i < step ? <CheckCircle2 size={15} className="text-brand-green shrink-0" /> : i === step ? <Loader2 size={15} className="text-brand-greenDark animate-spin shrink-0" /> : <Circle size={15} className="shrink-0" />}
+                  {s}
+                </li>
+              ))}
+            </ol>
+            <p className="text-[11px] text-brand-muted mt-4">This runs in the background — you can switch to any client or section and we’ll have it ready to review.</p>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
   if (taskRunning || phase === 'setup') {
     return (
       <div className="max-w-2xl mx-auto">
@@ -288,9 +354,15 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
               {/* Upload */}
               <div>
                 <label className="label mb-1.5 block">The bill</label>
-                <label className={'flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 cursor-pointer transition ' + (file ? 'border-brand-green bg-brand-tint/50' : 'border-brand-line hover:border-brand-green/50 hover:bg-brand-tint/30')}>
-                  {file ? <FileText size={26} className="text-brand-greenDark" /> : <UploadCloud size={26} className="text-brand-muted" />}
-                  <span className="text-sm font-medium">{file ? file.name : 'Drop a bill here or click to upload'}</span>
+                <label
+                  onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                  onDragEnter={(e) => e.preventDefault()}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => { e.preventDefault(); setDragOver(false); const f = e.dataTransfer.files?.[0]; if (f) setFile(f); }}
+                  className={'flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 cursor-pointer transition ' + (dragOver ? 'border-brand-green bg-brand-tint/70 ring-2 ring-brand-green/30' : file ? 'border-brand-green bg-brand-tint/50' : 'border-brand-line hover:border-brand-green/50 hover:bg-brand-tint/30')}
+                >
+                  {file ? <FileText size={26} className="text-brand-greenDark" /> : <UploadCloud size={26} className={dragOver ? 'text-brand-greenDark' : 'text-brand-muted'} />}
+                  <span className="text-sm font-medium">{dragOver ? 'Drop to upload' : file ? file.name : 'Drop a bill here or click to upload'}</span>
                   <span className="text-[11px] text-brand-muted">PDF, image, Word, Excel, CSV or text · up to ~6 MB</span>
                   <input type="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.tsv,image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) setFile(f); e.target.value = ''; }} />
                 </label>

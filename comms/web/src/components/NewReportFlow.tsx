@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { X, Building2, ArrowLeft, Loader2, FileSpreadsheet, Sparkles } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { X, Loader2, FileSpreadsheet, Sparkles } from 'lucide-react';
 import { api, type ClientProfile, type ReportProject, type ReportInputs } from '../lib/api';
 import { REPORT_TEMPLATES, getReportTemplate } from '../reports/registry';
 import { newProjectFromState } from '../reports/state';
@@ -25,101 +25,104 @@ function recommendTemplate(client: ClientProfile | null): { id: string; reason: 
 }
 
 // A request to start a new report. `templateId` preselects the template;
-// `profileId` preselects the client. (seedAngles kept for call-site compatibility.)
+// `profileId` is the client it's for (the active client tab). (seedAngles kept for
+// call-site compatibility.)
 export interface NewDocRequest { profileId?: string; templateId?: string; seedAngles?: string[] }
 
-// The "new report" flow: choose a template → choose the client → create. On success
-// it returns the created project (which the workspace opens as a tab).
+// The "new report" flow: ONE step — pick a template; the report is created for the
+// active client (request.profileId), so there's no "who is this for?" selector.
+// A preselected templateId creates immediately and skips the picker entirely.
 export function NewReportFlow({ request, onCreated, onCancel }: {
   request: NewDocRequest | null;
   onCreated: (p: ReportProject) => void;
   onCancel: () => void;
 }) {
-  const [tpl, setTpl] = useState<ReportTemplate | null>(null);
-  const [clients, setClients] = useState<ClientProfile[]>([]);
-  const [clientId, setClientId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [client, setClient] = useState<ClientProfile | null>(null);
+  const [creating, setCreating] = useState<string | null>(null); // template id mid-create
+  const [err, setErr] = useState<string | null>(null);
+  const createdRef = useRef(false); // guard the auto-create effect against double-fire
 
+  const create = async (tpl: ReportTemplate, c: ClientProfile | null) => {
+    setCreating(tpl.id); setErr(null);
+    try {
+      const state = tpl.seed(c);
+      // Bind the report to the tab it was created from even if the client fetch
+      // failed (so it never lands orphaned on the Free tab).
+      if (request?.profileId) state.clientProfileId = request.profileId;
+      const project = await api.projects.create(newProjectFromState(state));
+      onCreated(project);
+    } catch { setCreating(null); setErr('Couldn’t create the report — please try again.'); }
+  };
+
+  // Resolve the client for the active request, then auto-create if a template was
+  // preselected (e.g. "Draft follow-up" / "Generate this step" from the client hub).
   useEffect(() => {
-    if (!request) { setTpl(null); setClientId(null); setCreating(false); return; }
-    setTpl(getReportTemplate(request.templateId));
-    setClientId(request.profileId ?? null);
-    api.profiles.list().then(setClients).catch(() => {});
-  }, [request]);
+    createdRef.current = false;
+    if (!request) { setClient(null); setCreating(null); return; }
+    let cancelled = false;
+    (async () => {
+      const c = request.profileId ? await api.profiles.get(request.profileId).catch(() => null) : null;
+      if (cancelled) return;
+      setClient(c);
+      const tpl = request.templateId ? getReportTemplate(request.templateId) : undefined;
+      if (tpl && !createdRef.current) { createdRef.current = true; await create(tpl, c); }
+    })();
+    return () => { cancelled = true; };
+  }, [request]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const client = useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
   const rec = useMemo(() => recommendTemplate(client), [client]);
 
   if (!request) return null;
-
-  const create = async () => {
-    if (!tpl) return;
-    setCreating(true);
-    try {
-      const project = await api.projects.create(newProjectFromState(tpl.seed(client)));
-      onCreated(project);
-    } catch { setCreating(false); }
-  };
+  // A resolvable preselected template creates immediately — don't flash the picker.
+  const preselected = request.templateId ? getReportTemplate(request.templateId) : undefined;
+  if (preselected) {
+    return (
+      <div className="fixed inset-0 z-40 bg-brand-ink/40 grid place-items-center p-4" onClick={err ? onCancel : undefined}>
+        <div className="card px-6 py-5 flex items-center gap-3 text-sm" onClick={(e) => e.stopPropagation()}>
+          {err ? (
+            <>
+              <span className="text-up flex items-center gap-2"><X size={15} /> {err}</span>
+              <button className="btn-ghost !py-1 ml-1" onClick={() => create(preselected, client)}>Retry</button>
+              <button className="btn-ghost !py-1" onClick={onCancel}>Close</button>
+            </>
+          ) : (
+            <span className="text-brand-muted flex items-center gap-2"><Loader2 size={16} className="animate-spin text-brand-greenDark" /> Creating report…</span>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-40 bg-brand-ink/40 grid place-items-center p-4" onClick={onCancel}>
       <div className="card w-full max-w-xl max-h-[85vh] overflow-auto p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-base font-semibold flex items-center gap-2">
-            {tpl && <button className="btn-ghost !px-1.5 !py-1" onClick={() => setTpl(null)} title="Back to templates"><ArrowLeft size={15} /></button>}
-            {tpl ? 'Who is this report for?' : 'New report'}
-          </h3>
+          <h3 className="text-base font-semibold">New report{client ? ` — ${client.name}` : ''}</h3>
           <button className="btn-ghost !px-1.5 !py-1" onClick={onCancel}><X size={16} /></button>
         </div>
 
-        {!tpl ? (
-          <div>
-            {rec && (
-              <div className="mb-3 rounded-lg bg-brand-tint border border-brand-green/30 px-3 py-2 flex items-start gap-2">
-                <Sparkles size={14} className="text-brand-greenDark mt-0.5 shrink-0" />
-                <div className="text-[12px] text-brand-ink leading-snug">
-                  <b>Recommended: {getReportTemplate(rec.id)?.name ?? rec.id}.</b> {rec.reason}
-                </div>
-              </div>
-            )}
-            <div className="grid sm:grid-cols-2 gap-3">
-              {REPORT_TEMPLATES.map((t) => {
-                const isRec = rec?.id === t.id;
-                return (
-                  <button key={t.id} onClick={() => setTpl(t)} className={'card p-4 text-left hover:shadow-md hover:border-brand-green/40 transition relative ' + (isRec ? 'ring-1 ring-brand-green/50 border-brand-green/40' : '')}>
-                    {isRec && <span className="absolute top-2.5 right-2.5 text-[9px] uppercase tracking-wide font-medium text-brand-greenDark bg-brand-tint px-1.5 py-0.5 rounded">Recommended</span>}
-                    <span className={'grid place-items-center h-9 w-9 rounded-lg bg-brand-tint mb-2 ' + t.accent}><FileSpreadsheet size={18} /></span>
-                    <div className="font-medium text-sm">{t.name}</div>
-                    <div className="text-xs text-brand-muted mt-1 leading-relaxed">{t.description}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
-          <div>
-            <div className="space-y-1.5 max-h-[46vh] overflow-y-auto pr-1">
-              <button onClick={() => setClientId(null)} className={'w-full text-left rounded-lg border px-3 py-2.5 text-sm transition ' + (!clientId ? 'border-brand-green bg-brand-tint' : 'border-brand-line hover:bg-brand-tint/50')}>
-                <span className="font-medium">No client</span> <span className="text-brand-muted">— start blank, fill details by hand</span>
-              </button>
-              {clients.map((c) => (
-                <button key={c.id} onClick={() => setClientId(c.id)} className={'w-full text-left rounded-lg border px-3 py-2.5 flex items-center gap-2.5 transition ' + (clientId === c.id ? 'border-brand-green bg-brand-tint' : 'border-brand-line hover:bg-brand-tint/50')}>
-                  <span className="grid place-items-center h-8 w-8 rounded-lg bg-brand-tint text-brand-greenDark shrink-0"><Building2 size={15} /></span>
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium truncate">{c.name}</span>
-                    <span className="block text-xs text-brand-muted truncate">{c.inputs.currentSupplier || (c.inputs as Record<string, string>).industry || 'Client record'}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-            <div className="flex justify-end gap-2 mt-4">
-              <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-              <button className="btn-primary" onClick={create} disabled={creating}>
-                {creating ? <Loader2 size={15} className="animate-spin" /> : null} Create report
-              </button>
+        {rec && (
+          <div className="mb-3 rounded-lg bg-brand-tint border border-brand-green/30 px-3 py-2 flex items-start gap-2">
+            <Sparkles size={14} className="text-brand-greenDark mt-0.5 shrink-0" />
+            <div className="text-[12px] text-brand-ink leading-snug">
+              <b>Recommended: {getReportTemplate(rec.id)?.name ?? rec.id}.</b> {rec.reason}
             </div>
           </div>
         )}
+        <div className="grid sm:grid-cols-2 gap-3">
+          {REPORT_TEMPLATES.map((t) => {
+            const isRec = rec?.id === t.id;
+            const busy = creating === t.id;
+            return (
+              <button key={t.id} disabled={!!creating} onClick={() => create(t, client)} className={'card p-4 text-left hover:shadow-md hover:border-brand-green/40 transition relative disabled:opacity-60 ' + (isRec ? 'ring-1 ring-brand-green/50 border-brand-green/40' : '')}>
+                {isRec && <span className="absolute top-2.5 right-2.5 text-[9px] uppercase tracking-wide font-medium text-brand-greenDark bg-brand-tint px-1.5 py-0.5 rounded">Recommended</span>}
+                <span className={'grid place-items-center h-9 w-9 rounded-lg bg-brand-tint mb-2 ' + t.accent}>{busy ? <Loader2 size={18} className="animate-spin" /> : <FileSpreadsheet size={18} />}</span>
+                <div className="font-medium text-sm">{t.name}</div>
+                <div className="text-xs text-brand-muted mt-1 leading-relaxed">{t.description}</div>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

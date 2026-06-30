@@ -186,9 +186,10 @@ Return ONLY JSON in exactly this shape:
   "summary": "one concise sentence describing what this source is and the single most important takeaway, suitable for a CRM timeline entry",
   "points": ["a concise, useful FACT actually stated — a goal, figure, pain point, renewal driver or objection"],
   "angles": ["a client-specific CONVERSATIONAL ANGLE the agent can use to build the relationship and move the deal forward on the next call — e.g. a hook tied to something they said, a concern to pre-empt, a follow-up to raise, a value point that matters to THIS client. Actionable and personal, not generic market commentary."],
+  "rapport": ["a warm, genuinely-curious RAPPORT question to open or deepen the relationship — personal and specific to THIS business's actual work/practices (drawn from what they said or the known details), the kind of question other callers never ask and that they'll enjoy answering. NOT about energy, price, contracts or anything technical/analytical."],
   "suggestedMilestones": ["zero or more of: billReceived, loaSent, loaReturned, quotesGathered, proposalSent, signed — ONLY if the source clearly evidences that milestone (e.g. an attached/described bill -> billReceived; a signed LOA -> loaReturned)"]
 }
-Leave any profile field as an empty string if not clearly stated. For 'consumption' include units (e.g. "450,000 kWh/yr"). Provide 0-8 points and 0-5 angles. Base angles ONLY on this source and the known client details — never invent. Plain UK English.`,
+Leave any profile field as an empty string if not clearly stated. For 'consumption' include units (e.g. "450,000 kWh/yr"). Provide 0-8 points, 0-5 angles and 0-4 rapport questions. Base angles and rapport ONLY on this source and the known client details — never invent. Plain UK English.`,
   };
 }
 
@@ -556,6 +557,7 @@ Return ONLY JSON in exactly this shape (use "" / [] when something genuinely isn
   "summary": "",
   "points": [],
   "angles": [],
+  "rapport": [],
   "suggestedMilestones": []
 }
 
@@ -565,6 +567,7 @@ Guidance:
 - telephone: prefer a number stated in the transcript (Dialpad shows the caller's number); else from the website.
 - companySummary: 2-3 plain-English sentences on what the company does (from the website).
 - summary: one line capturing where this prospect is. points: the key facts gathered. angles: client-specific conversational hooks for the next call. suggestedMilestones: any of billReceived, loaSent, loaReturned, quotesGathered, proposalSent, signed that the sources clearly evidence.
+- rapport: 0-4 warm, genuinely-curious RAPPORT questions tailored to what this specific business actually DOES (drawn mainly from the company website / what they make or offer) — personal, human openers other callers never ask and that they'll enjoy answering. NOT about energy, price, contracts or anything technical.
 - Use ONLY what's in the sources. UK English. Never invent a company number, MPAN, MPRN, postcode or price.`,
   };
 }

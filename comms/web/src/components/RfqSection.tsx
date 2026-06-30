@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, Download, ClipboardList, Globe, MessageSquareText, Check, Save,
-  FileSignature, ReceiptText, CheckCircle2, Circle, PhoneCall, Lightbulb,
+  FileSignature, ReceiptText, CheckCircle2, Circle, PhoneCall, Lightbulb, AlertTriangle,
 } from 'lucide-react';
 import { api, type ClientProfile, type ReportInputs, type ClientFile, type ClientActivity } from '../lib/api';
 import {
@@ -72,18 +72,30 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [activities, setActivities] = useState<ClientActivity[]>(() => client.activities ?? []);
   const [gameplan, setGameplan] = useState<Record<string, { cue: string; ask: string }>>({});
-  const [busy, setBusy] = useState<null | 'web' | 'prep' | 'note' | 'gen' | 'save'>(null);
+  const [busy, setBusy] = useState<null | 'web' | 'note' | 'gen' | 'save'>(null);
+  const [prepping, setPrepping] = useState(false); // background call-prep status (decoupled from `busy` so it never locks Save/Generate)
+  const [ready, setReady] = useState(false);        // entry hydrate complete → safe to auto-prep on the freshest data
+  const [prepNonce, setPrepNonce] = useState(0);    // bump to force a re-prep (e.g. after a website pull)
+  const [prepFailed, setPrepFailed] = useState(false); // last auto-prep hit a transient failure (shown + retried)
+  const [prepRetry, setPrepRetry] = useState(0);    // bump to force a bounded retry after a failure
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [url, setUrl] = useState<string>(() => String((client.inputs as Record<string, unknown>).website ?? '').trim());
   const [noteText, setNoteText] = useState('');
-  const [showSources, setShowSources] = useState(false);
   const dirty = useRef(false);
   const hydrated = useRef(false); // one-shot: the entry refetch may apply only ONCE, never after an edit
   const inputsRef = useRef(inputs); inputsRef.current = inputs;
   const activitiesRef = useRef(activities); activitiesRef.current = activities;
   const filesRef = useRef(files); filesRef.current = files;
+  // Auto-prep bookkeeping: a stable signature of what would change the brief (new
+  // activity / bill / forced nonce), a guard so two preps never overlap, and a ref
+  // to the live signature so a prep that finishes stale can catch up.
+  const prepSig = `${client.id}|${activities.length}|${files.length}|${prepNonce}`;
+  const prepSigRef = useRef(prepSig); prepSigRef.current = prepSig;
+  const lastPrepSig = useRef('');
+  const prepRunningRef = useRef(false);
+  const retryCountRef = useRef(0); // bounded auto-retries after a transient prep failure
 
   // On entry, re-pull the client (the single source of truth) + its files, so anything
   // gathered since — bills, transcripts, edits in other sections — shows here. The one-shot
@@ -91,12 +103,16 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
   // clears `dirty`).
   useEffect(() => {
     let cancelled = false;
-    api.profiles.get(client.id).then((fresh) => {
-      if (!cancelled && !hydrated.current && !dirty.current) setInputs(fresh.inputs as ReportInputs);
-      if (!cancelled) setActivities(fresh.activities ?? []);
-      hydrated.current = true;
-    }).catch(() => { hydrated.current = true; });
-    api.files.list({ clientProfileId: client.id }).then((f) => { if (!cancelled) setFiles(f); }).catch(() => {});
+    Promise.all([
+      api.profiles.get(client.id),
+      api.files.list({ clientProfileId: client.id }).catch(() => [] as ClientFile[]),
+    ]).then(([fresh, f]) => {
+      if (cancelled) return;
+      if (!hydrated.current && !dirty.current) setInputs(fresh.inputs as ReportInputs);
+      setActivities(fresh.activities ?? []);
+      setFiles(f);
+      hydrated.current = true; setReady(true);
+    }).catch(() => { hydrated.current = true; setReady(true); setNote('Couldn’t refresh this client — working from the last loaded details.'); });
     return () => { cancelled = true; };
   }, [client.id]);
 
@@ -147,25 +163,35 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
     try {
       const res = await api.rfq.scrape(url, rfqAllValues(inputsRef.current));
       if (res.error) setErr(res.error);
-      else { const { inputs: merged, filled } = applyRfqExtract(inputsRef.current, res.fields, 'website'); update(merged); setNote(filled ? `Pulled ${filled} field${filled === 1 ? '' : 's'} from the website.` : 'Nothing new found on the website.'); }
+      else { const { inputs: merged, filled } = applyRfqExtract(inputsRef.current, res.fields, 'website'); update(merged); setPrepNonce((n) => n + 1); setNote(filled ? `Pulled ${filled} field${filled === 1 ? '' : 's'} from the website.` : 'Nothing new found on the website.'); }
     } catch (e) { setErr(String((e as Error).message)); } finally { setBusy(null); }
   };
 
   // Prep the call from everything the client profile already holds: fill what we can, then
   // brief the agent on each remaining question with a relevant cue + a way to ask it.
-  const prepCall = async (acts: ClientActivity[] = activitiesRef.current) => {
-    setBusy('prep'); setErr(null); setNote(null);
+  // Runs in the background (own `prepping` status, never touches `busy`); `silent`
+  // suppresses the success note for automatic runs. A guard stops overlapping runs.
+  const prepCall = async (acts: ClientActivity[] = activitiesRef.current, opts: { silent?: boolean } = {}) => {
+    if (prepRunningRef.current) return;
+    prepRunningRef.current = true; lastPrepSig.current = prepSigRef.current;
+    setPrepping(true); setErr(null); if (!opts.silent) setNote(null);
+    let extractFailed = false, gameplanFailed = false, threw = false;
     try {
       let merged = inputsRef.current;
       const ctx = buildRfqContext(merged, acts);
       let filled = 0;
-      let extractFailed = false;
       if (ctx.trim()) {
         const ex = await api.rfq.extract(ctx, rfqAllValues(merged));
-        if (ex.error) { setErr(ex.error); extractFailed = true; }
+        if (ex.error) { if (!opts.silent) setErr(ex.error); extractFailed = true; }
         else { const r = applyRfqExtract(merged, ex.fields, 'transcript'); merged = r.inputs; filled = r.filled; }
       }
-      if (merged !== inputsRef.current) update(merged);
+      // Reflect extracted values in the form. A SILENT (automatic) prep must NOT mark
+      // the record dirty — opening a client shouldn't schedule an unprompted server
+      // write; the values still persist when the user next edits, saves or generates.
+      if (merged !== inputsRef.current) {
+        if (opts.silent) { inputsRef.current = merged; hydrated.current = true; setInputs(merged); }
+        else update(merged);
+      }
       // Brief on what's still missing (skip derived/record fields).
       const missing = RFQ_FIELDS.filter((f) => {
         const view = rfqFieldView(merged, f.key);
@@ -173,21 +199,49 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
         const v = view.value || (f.key === 'billsAvailable' && filesRef.current.length ? 'Yes' : '');
         return !v.trim();
       });
-      let gameplanFailed = false;
       if (!missing.length) {
         setGameplan({}); // nothing left to brief — clear any stale cues
       } else if (ctx.trim() && !extractFailed) {
         const gp = await api.rfq.gameplan(buildRfqContext(merged, acts), missing.map((f) => ({ key: f.key, question: f.question })));
-        if (gp.error) { gameplanFailed = true; setErr(gp.error); }
+        if (gp.error) { gameplanFailed = true; if (!opts.silent) setErr(gp.error); }
         else { const map: Record<string, { cue: string; ask: string }> = {}; for (const it of gp.items) if (it.cue || it.ask) map[it.key] = { cue: it.cue, ask: it.ask }; setGameplan(map); }
       }
-      if (!extractFailed && !gameplanFailed) {
+      if (!opts.silent && !extractFailed && !gameplanFailed) {
         setNote(ctx.trim()
           ? `Filled ${filled} from this client’s history${missing.length ? `; briefed you on ${missing.length} still to ask.` : '.'}`
           : 'No history on this client yet — log a call note or pull from the website to build the brief.');
       }
-    } catch (e) { setErr(String((e as Error).message)); } finally { setBusy(null); }
+    } catch (e) { threw = true; if (!opts.silent) setErr(String((e as Error).message)); }
+    finally {
+      prepRunningRef.current = false; setPrepping(false);
+      const failed = extractFailed || gameplanFailed || threw;
+      setPrepFailed(failed);
+      if (!failed) retryCountRef.current = 0;
+      const sigMoved = prepSigRef.current !== lastPrepSig.current;
+      if (sigMoved) {
+        // A trigger arrived mid-run (a note/bill logged during prep) — re-prep latest.
+        setTimeout(() => { if (!prepRunningRef.current && prepSigRef.current !== lastPrepSig.current) void prepCall(activitiesRef.current, { silent: true }); }, 150);
+      } else if (failed && retryCountRef.current < 2) {
+        // Transient failure with no new input — bounded backoff retry so a blip self-heals.
+        retryCountRef.current += 1;
+        setTimeout(() => { lastPrepSig.current = ''; setPrepRetry((n) => n + 1); }, 3000);
+      }
+    }
   };
+
+  // Automatic call prep — on open and whenever the brief inputs change (a new note,
+  // a new bill, a website pull). No manual trigger. Debounced + de-duped by the
+  // signature so it never fires on every keystroke or hammers the AI; gated on
+  // `ready` so the first run sees the freshest record. `prepRetry` re-fires it after
+  // a transient failure.
+  useEffect(() => {
+    if (!ready) return;
+    const t = setTimeout(() => {
+      if (lastPrepSig.current === prepSigRef.current || prepRunningRef.current) return;
+      void prepCall(activitiesRef.current, { silent: true });
+    }, 600);
+    return () => clearTimeout(t);
+  }, [ready, prepSig, prepRetry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Log a call note onto the client timeline (so it lives on the profile, not just here),
   // then re-prep so the form + brief reflect it.
@@ -199,9 +253,9 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
       setNoteText('');
       const fresh = await api.profiles.get(client.id);
       const acts = fresh.activities ?? [];
+      // New activity bumps the prep signature → the auto-prep effect re-briefs.
       activitiesRef.current = acts; setActivities(acts);
-      await prepCall(acts);
-    } catch (e) { setErr(String((e as Error).message)); setBusy(null); }
+    } catch (e) { setErr(String((e as Error).message)); } finally { setBusy(null); }
   };
 
   const generate = async () => {
@@ -241,35 +295,38 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
 
       {(err || note) && <div className={'rounded-lg px-3 py-2 text-[12px] ' + (err ? 'bg-up/10 text-up' : 'bg-brand-tint text-brand-greenDark')}>{err || note}</div>}
 
-      {/* call prep — draws on everything the client profile already holds */}
+      {/* Call prep — automatic; reads the client's record & conversations and keeps the brief current */}
       <section className="card p-4">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2.5">
-            <span className="grid place-items-center h-9 w-9 rounded-lg bg-brand-tint text-brand-greenDark shrink-0"><Sparkles size={17} /></span>
-            <div>
-              <div className="text-sm font-semibold">Call prep</div>
-              <p className="text-[11px] text-brand-muted">Reads this client’s record, conversations &amp; talking points — fills what we can and briefs you on the rest.</p>
+        <div className="flex items-center gap-2.5">
+          <span className="grid place-items-center h-9 w-9 rounded-lg bg-brand-tint text-brand-greenDark shrink-0"><Sparkles size={17} /></span>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold flex items-center gap-2">
+              Call prep
+              {prepping
+                ? <span className="text-[11px] font-normal text-brand-greenDark inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> updating…</span>
+                : prepFailed
+                  ? <span className="text-[11px] font-normal text-amber-600 inline-flex items-center gap-1"><AlertTriangle size={11} /> couldn’t refresh — retrying</span>
+                  : <span className="text-[11px] font-normal text-brand-muted inline-flex items-center gap-1"><Check size={11} className="text-brand-green" /> up to date</span>}
             </div>
+            <p className="text-[12px] text-brand-muted">Automatically reads this client’s record, conversations &amp; talking points — fills what it can and briefs you on the rest. No need to trigger it.</p>
           </div>
-          <button onClick={() => prepCall()} className="btn-primary !py-1.5 shrink-0" disabled={!!busy}>{busy === 'prep' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Prep call</button>
         </div>
-        <button onClick={() => setShowSources((s) => !s)} className="text-[12px] text-brand-greenDark inline-flex items-center gap-1.5 mt-3"><MessageSquareText size={13} /> {showSources ? 'Hide' : 'Log a call note or add a source'}</button>
-        {showSources && (
-          <div className="mt-2 space-y-3 border-t border-brand-line pt-3">
-            <div>
-              <label className="text-[11px] text-brand-muted block mb-0.5">Log a call note — saved to the client timeline, then used to fill the form</label>
-              <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} rows={4} placeholder="Type or paste what they said on the call…" className="input !py-1.5 text-sm resize-y" />
-              <button onClick={logNote} className="btn-ghost !py-1.5 mt-1.5" disabled={!!busy}>{busy === 'note' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Log &amp; fill from this</button>
-            </div>
-            <div className="flex items-end gap-2">
-              <div className="flex-1">
-                <label className="text-[11px] text-brand-muted block mb-0.5 flex items-center gap-1.5"><Globe size={12} /> Company website</label>
-                <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="acme.co.uk" className="input !py-1.5 text-sm" />
-              </div>
-              <button onClick={pullWebsite} className="btn-ghost !py-1.5" disabled={!!busy}>{busy === 'web' ? <Loader2 size={15} className="animate-spin" /> : <Globe size={15} />} Pull</button>
-            </div>
+
+        {/* Sources that feed the brief: paste what they said, or pull the website */}
+        <div className="grid sm:grid-cols-2 gap-3 mt-3 pt-3 border-t border-brand-line">
+          <div className="rounded-lg border border-brand-line bg-brand-surface/40 p-3 flex flex-col">
+            <div className="text-[12px] font-medium text-brand-ink flex items-center gap-1.5 mb-1"><MessageSquareText size={14} className="text-brand-greenDark" /> Call transcript or note</div>
+            <p className="text-[11px] text-brand-muted mb-2">Paste what they said — it’s saved to the timeline and fills the form automatically.</p>
+            <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} rows={5} placeholder="Type or paste the call…" className="input !py-2 text-sm resize-y flex-1" />
+            <button onClick={logNote} className="btn-ghost !py-1.5 mt-2 w-full justify-center" disabled={!!busy || !noteText.trim()}>{busy === 'note' ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Save &amp; fill from this</button>
           </div>
-        )}
+          <div className="rounded-lg border border-brand-line bg-brand-surface/40 p-3 flex flex-col">
+            <div className="text-[12px] font-medium text-brand-ink flex items-center gap-1.5 mb-1"><Globe size={14} className="text-brand-greenDark" /> Company website</div>
+            <p className="text-[11px] text-brand-muted mb-2">Pull public details from their site to top up the form.</p>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="acme.co.uk" className="input !py-2 text-sm" />
+            <button onClick={pullWebsite} className="btn-ghost !py-1.5 mt-2 w-full justify-center" disabled={!!busy || !url.trim()}>{busy === 'web' ? <Loader2 size={15} className="animate-spin" /> : <Globe size={15} />} Pull from website</button>
+          </div>
+        </div>
       </section>
 
       <div className="grid xl:grid-cols-2 gap-5 items-start">
@@ -282,7 +339,7 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
               <ReadyChip ok={loaReady} okLabel="LOA drafted" noLabel="LOA not yet" icon={<FileSignature size={12} />} />
               <ReadyChip ok={files.length > 0} okLabel={`${files.length} bill${files.length === 1 ? '' : 's'}/doc on file`} noLabel="No bills yet" icon={<ReceiptText size={12} />} />
             </div>
-            <p className="text-[11px] text-brand-muted mt-2">{allDone ? 'Every detail captured — generate the form for the closer.' : `${comp.total - comp.known} to capture. Hit “Prep call” to draw on what they’ve already told us, then work the questions below.`}</p>
+            <p className="text-[12px] text-brand-muted mt-2">{allDone ? 'Every detail captured — generate the form for the closer.' : `${comp.total - comp.known} to capture. We’ve drawn on what they’ve already told us — work the questions below on the call.`}</p>
           </section>
 
           {allDone ? (
@@ -302,23 +359,23 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
                 <section key={section.title} className="card p-4">
                   <div className="flex items-center justify-between mb-2.5">
                     <h3 className="label">{section.title}</h3>
-                    <span className="text-[11px] text-brand-muted">{known}/{section.fields.length}</span>
+                    <span className="text-[12px] text-brand-muted">{known}/{section.fields.length}</span>
                   </div>
-                  <div className="space-y-3">
+                  <div className="space-y-3.5">
                     {show.map((f) => {
                       const view = rfqFieldView(inputs, f.key);
                       const value = fieldVal(f.key);
                       const filled = !!value.trim();
                       return (
                         <div key={f.key}>
-                          <label className="text-[12px] text-brand-ink mb-1 leading-snug flex items-start gap-1.5">
-                            {filled ? <Check size={13} className="text-brand-green mt-0.5 shrink-0" /> : <Circle size={11} className="text-brand-line mt-1 shrink-0" />}
-                            <span>{f.question}{view.derived && <span className="text-brand-muted"> · from the client record</span>}</span>
+                          <label className="text-sm text-brand-ink mb-1.5 leading-relaxed flex items-start gap-2">
+                            {filled ? <Check size={15} className="text-brand-green mt-0.5 shrink-0" /> : <Circle size={13} className="text-brand-line mt-1 shrink-0" />}
+                            <span className="font-medium">{f.question}{view.derived && <span className="text-brand-muted font-normal"> · from the client record</span>}</span>
                           </label>
                           {!filled && gameplan[f.key]?.cue && (
-                            <div className="text-[11px] text-brand-greenDark bg-brand-tint rounded px-2 py-1 mb-1 leading-snug flex gap-1.5"><Lightbulb size={12} className="mt-0.5 shrink-0" /><span><b>You already know:</b> {gameplan[f.key].cue}</span></div>
+                            <div className="text-[12px] text-brand-greenDark bg-brand-tint rounded px-2 py-1.5 mb-1 leading-relaxed flex gap-1.5"><Lightbulb size={13} className="mt-0.5 shrink-0" /><span><b>You already know:</b> {gameplan[f.key].cue}</span></div>
                           )}
-                          {!filled && gameplan[f.key]?.ask && <p className="text-[11px] text-brand-muted italic mb-1 leading-snug">Try: “{gameplan[f.key].ask}”</p>}
+                          {!filled && gameplan[f.key]?.ask && <p className="text-[12px] text-brand-muted italic mb-1.5 leading-relaxed">Try: “{gameplan[f.key].ask}”</p>}
                           {view.derived ? (
                             <div className="input !py-1.5 text-sm bg-brand-tint/30 text-brand-muted">{value || 'Add this in the client’s meters'}</div>
                           ) : f.multiline ? (

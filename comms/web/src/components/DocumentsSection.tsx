@@ -2,23 +2,38 @@ import { useEffect, useState } from 'react';
 import { FilePlus2, X, FileText, Plus, ExternalLink } from 'lucide-react';
 import { api, type ClientProfile } from '../lib/api';
 import { useWorkspace } from '../workspace/WorkspaceContext';
+import { useClientTabs } from '../workspace/ClientTabsContext';
 import { ReportStudio } from './reports/ReportStudio';
 
-// The Reports workspace: a strip of open-report tabs over the active studio.
-// Open reports persist in the workspace store, so you can leave for other
-// sections and come back to them intact. With a client tab active (clientId set)
-// and nothing open, it shows that client's reports to open or create.
+// The Reports workspace. The CLIENT (the active client tab) is the top-level unit:
+// the report subtabs below belong only to that client, so all open report tabs
+// relate to one client and switching the client tab switches the visible reports.
+// On the Free tab it shows client-less reports. With a client active and nothing
+// open, it shows that client's reports to open or create.
 export function DocumentsSection({ clientId }: { clientId?: string } = {}) {
   const ws = useWorkspace();
-  const active = ws.activeId ? ws.sessions[ws.activeId] : null;
+  const tabs = useClientTabs();
+  const clientName = clientId ? (tabs.openClients.find((c) => c.id === clientId)?.name ?? null) : null;
+
+  // Only this client's open reports (client-less reports on the Free tab). The
+  // "effective active" is the global active report when it belongs here, else this
+  // client's first open report — so switching client tabs never shows another
+  // client's report, and closing a tab can't jump focus across clients.
+  const tabIds = ws.order.filter((id) => (ws.sessions[id]?.clientId ?? undefined) === (clientId ?? undefined));
+  const effectiveActiveId = ws.activeId && tabIds.includes(ws.activeId) ? ws.activeId : (tabIds[0] ?? null);
+  const active = effectiveActiveId ? ws.sessions[effectiveActiveId] : null;
 
   return (
     <div>
-      {ws.order.length > 0 && (
+      <div className="text-[11px] uppercase tracking-wide text-brand-muted mb-2">
+        {clientName ? `${clientName} · Reports` : 'Reports'}
+      </div>
+
+      {tabIds.length > 0 && (
         <div className="flex items-center gap-1 mb-3 overflow-x-auto pb-0.5 sticky top-[var(--topbar-h)] z-[21] -mx-1 px-1">
-          {ws.order.map((id) => {
+          {tabIds.map((id) => {
             const s = ws.sessions[id];
-            const isActive = id === ws.activeId;
+            const isActive = id === effectiveActiveId;
             return (
               <div
                 key={id}
@@ -40,7 +55,7 @@ export function DocumentsSection({ clientId }: { clientId?: string } = {}) {
               </div>
             );
           })}
-          <button className="btn-ghost !py-1.5 !px-2 shrink-0 ml-1" onClick={() => ws.requestNewDoc({})} title="New document">
+          <button className="btn-ghost !py-1.5 !px-2 shrink-0 ml-1" onClick={() => ws.requestNewDoc({ profileId: clientId })} title="New report">
             <Plus size={15} />
           </button>
         </div>
@@ -59,7 +74,7 @@ export function DocumentsSection({ clientId }: { clientId?: string } = {}) {
           <div className="grid place-items-center h-12 w-12 rounded-xl bg-brand-tint text-brand-greenDark mx-auto mb-3"><FileText size={22} /></div>
           <h2 className="text-lg font-semibold">No reports open</h2>
           <p className="text-sm text-brand-muted mt-1.5 mb-4">
-            Open a report from a client, or start a new one. Open reports stay here as tabs while you work elsewhere in the app.
+            Open a client tab to work on their reports, or start a new one here. Open reports stay as tabs while you work elsewhere.
           </p>
           <button className="btn-primary mx-auto" onClick={() => ws.requestNewDoc({})}><FilePlus2 size={16} /> New report</button>
         </div>

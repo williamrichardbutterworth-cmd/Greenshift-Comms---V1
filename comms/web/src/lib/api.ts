@@ -290,6 +290,8 @@ export interface SourceAnalysis {
   kind: string; profile: Partial<ReportInputs>; summary: string; points: string[];
   /** Client-specific conversational angles/hooks for the next call. */
   angles: string[];
+  /** Warm, personal rapport-building questions tailored to the business. */
+  rapport: string[];
   suggestedMilestones: string[]; provider: string; error?: string;
 }
 export interface NextStep { action: string; rationale: string; templateId: string; provider: string; error?: string; }
@@ -425,7 +427,7 @@ export interface ClientIntakeResult {
   fuel: '' | 'gas' | 'electric' | 'both';
   currentSupplier: string; contractEnd: string; consumption: string;
   meters: ClientMeter[]; services: string[]; companySummary: string;
-  summary: string; points: string[]; angles: string[]; suggestedMilestones: string[];
+  summary: string; points: string[]; angles: string[]; rapport: string[]; suggestedMilestones: string[];
   websiteUrl: string; provider: string; error?: string;
 }
 export interface ClientIntakePayload { website?: string; transcript?: string; fileTexts?: string[]; images?: { base64: string; mime?: string }[]; }

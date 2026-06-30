@@ -29,6 +29,16 @@ export default {
       boxShadow: {
         soft: '0 1px 2px rgba(43,42,46,0.04), 0 8px 24px rgba(43,42,46,0.06)',
       },
+      // Vertical "scanning" sweep used over the bill preview during analysis.
+      keyframes: {
+        scan: {
+          '0%': { transform: 'translateY(-110%)' },
+          '100%': { transform: 'translateY(560%)' },
+        },
+      },
+      animation: {
+        scan: 'scan 2.4s cubic-bezier(0.45,0,0.55,1) infinite',
+      },
     },
   },
   plugins: [],

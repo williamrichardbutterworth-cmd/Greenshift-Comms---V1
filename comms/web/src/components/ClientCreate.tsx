@@ -64,10 +64,14 @@ export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientPro
       if (transcript.trim()) await api.profiles.addActivity(created.id, {
         type: 'transcript', title: r.summary || 'Call analysed',
         detail: r.points.length ? r.points.map((p) => `• ${p}`).join('\n') : undefined,
-        meta: r.angles.length ? { angles: r.angles } : undefined,
+        meta: (r.angles.length || r.rapport.length) ? { ...(r.angles.length ? { angles: r.angles } : {}), ...(r.rapport.length ? { rapport: r.rapport } : {}) } : undefined,
       }).catch(() => {});
+      // Rapport openers are largely website-derived — keep them on the website note,
+      // but ONLY when there's no transcript activity already carrying them, so the
+      // rapport array isn't stored on two timeline entries.
+      const rapportOnTranscript = !!transcript.trim() && r.rapport.length > 0;
       if (website.trim() && r.companySummary) await api.profiles.addActivity(created.id, {
-        type: 'note', title: 'Website summarised', detail: r.companySummary, meta: { website: r.websiteUrl },
+        type: 'note', title: 'Website summarised', detail: r.companySummary, meta: { website: r.websiteUrl, ...(!rapportOnTranscript && r.rapport.length ? { rapport: r.rapport } : {}) },
       }).catch(() => {});
       const finalClient = await api.profiles.get(created.id).catch(() => created);
       onCreated(finalClient);

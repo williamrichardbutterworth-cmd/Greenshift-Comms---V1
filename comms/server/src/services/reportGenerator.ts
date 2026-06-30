@@ -44,19 +44,21 @@ export interface SourceAnalysis {
   points: string[];
   /** Client-specific conversational angles/hooks for the next call. */
   angles: string[];
+  /** Warm, personal rapport-building questions tailored to the business. */
+  rapport: string[];
   suggestedMilestones: string[];
   provider: string;
   error?: string;
 }
 
 export async function analyzeSource(text: string, kind: SourceKind, currentInputs?: ReportInputs): Promise<SourceAnalysis> {
-  const empty: SourceAnalysis = { kind, profile: {}, summary: '', points: [], angles: [], suggestedMilestones: [], provider: 'none' };
+  const empty: SourceAnalysis = { kind, profile: {}, summary: '', points: [], angles: [], rapport: [], suggestedMilestones: [], provider: 'none' };
   if (!text.trim()) return empty;
   if (!aiConfigured()) return { ...empty, error: 'Automatic analysis isn’t configured.' };
   try {
     const ai = getAI();
     const { system, prompt } = sourceAnalysisPrompt(text, kind, currentInputs);
-    const res = await ai.generateJSON<{ kind?: string; profile?: Record<string, unknown>; summary?: unknown; points?: unknown; angles?: unknown; suggestedMilestones?: unknown }>({ system, prompt, maxTokens: 1500 });
+    const res = await ai.generateJSON<{ kind?: string; profile?: Record<string, unknown>; summary?: unknown; points?: unknown; angles?: unknown; rapport?: unknown; suggestedMilestones?: unknown }>({ system, prompt, maxTokens: 1500 });
     const profile: Record<string, string> = {};
     for (const k of PROFILE_KEYS) {
       const v = res.profile?.[k];
@@ -70,7 +72,7 @@ export async function analyzeSource(text: string, kind: SourceKind, currentInput
       kind: typeof res.kind === 'string' ? res.kind : (kind === 'auto' ? 'note' : kind),
       profile,
       summary: typeof res.summary === 'string' ? res.summary.slice(0, 400) : '',
-      points: strList(res.points, 8), angles: strList(res.angles, 5), suggestedMilestones, provider: ai.name,
+      points: strList(res.points, 8), angles: strList(res.angles, 5), rapport: strList(res.rapport, 4), suggestedMilestones, provider: ai.name,
     };
   } catch (e) {
     return { ...empty, provider: 'error', error: (e as Error).message };

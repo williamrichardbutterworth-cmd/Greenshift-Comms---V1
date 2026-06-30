@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, FileText, Paperclip, Plus, FilePlus2,
   Phone, CheckCircle2, Circle, RefreshCw, Trash2, ExternalLink,
-  Wand2, Lightbulb, Copy, Check, UploadCloud, FileSignature, ClipboardList, ReceiptText,
+  Wand2, Lightbulb, Copy, Check, UploadCloud, FileSignature, ClipboardList, ReceiptText, HeartHandshake,
 } from 'lucide-react';
 import {
   api, type ClientProfile, type ClientStage, type ClientFile, type ActivityType,
   type SourceKind, type NextStep, type ReportInputs,
 } from '../lib/api';
-import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, stageIndex } from '../lib/crm';
+import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, stageIndex, gatherAngles, gatherRapport } from '../lib/crm';
 import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '../lib/loa';
 import { rfqCompleteness } from '../lib/rfq';
 import { ClientJourney } from './ClientJourney';
@@ -64,20 +64,11 @@ export function ClientHub({
     loadFiles();
   }, [clientId, loadFiles, recommend]);
 
-  // Client-specific "talk track": the conversational angles gathered across all
-  // logged sources, newest first, de-duplicated.
-  const angles = useMemo(() => {
-    const seen = new Set<string>(); const out: string[] = [];
-    for (const a of client?.activities ?? []) {
-      for (const ang of (Array.isArray(a.meta?.angles) ? a.meta!.angles : [])) {
-        if (typeof ang !== 'string') continue;
-        const t = ang.trim(); const k = t.toLowerCase();
-        if (t && !seen.has(k)) { seen.add(k); out.push(t); }
-      }
-      if (out.length >= 8) break;
-    }
-    return out;
-  }, [client]);
+  // Two client-specific talk tracks gathered across all logged sources, newest
+  // first, de-duplicated: `angles` = the expertise/deal points; `rapport` = warm,
+  // personal openers tailored to their business.
+  const angles = useMemo(() => gatherAngles(client?.activities), [client]);
+  const rapport = useMemo(() => gatherRapport(client?.activities), [client]);
 
   if (err && !client) return <div className="max-w-wide mx-auto"><button className="btn-ghost mb-3" onClick={onBack}><ArrowLeft size={15} /> Back</button><p className="text-sm text-up" role="alert">{err}</p></div>;
   if (!client) return <div className="max-w-wide mx-auto"><Loader2 className="animate-spin text-brand-green mt-10 mx-auto" size={22} /></div>;
@@ -118,10 +109,11 @@ export function ClientHub({
     for (const m of a.suggestedMilestones) if (!tracker[m]) tracker[m] = new Date().toISOString();
     await patch({ inputs: mergedInputs, tracker });
     const actType: ActivityType = sourceKind === 'email' ? 'email-received' : sourceKind === 'bill' ? 'file' : sourceKind === 'transcript' ? 'transcript' : 'note';
+    const meta = { ...(a.angles?.length ? { angles: a.angles } : {}), ...(a.rapport?.length ? { rapport: a.rapport } : {}) };
     const updated = await logActivity({
       type: actType, title: a.summary || 'Update logged',
       detail: a.points.length ? a.points.map((p) => `• ${p}`).join('\n') : undefined,
-      meta: a.angles?.length ? { angles: a.angles } : undefined,
+      meta: Object.keys(meta).length ? meta : undefined,
     });
     if (updated) recommend(updated);
   };
@@ -269,16 +261,19 @@ export function ClientHub({
             </section>
 
             <section className="card p-4">
-              <div className="flex items-center gap-2 mb-2.5">
+              <div className="flex items-center gap-2 mb-3">
                 <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/10 text-brand-greenDark"><Lightbulb size={13} /></span>
                 <h3 className="text-sm font-semibold">Talk track</h3>
-                <span className="text-[11px] text-brand-muted hidden sm:inline">— call points for this client</span>
+                <span className="text-[11px] text-brand-muted hidden sm:inline">— how to lead the next call</span>
                 {angles.length > 0 && (
                   <button className="btn-ghost !py-1 !px-2 text-xs ml-auto shrink-0" onClick={() => onDraftFromAngles(client, angles)} title="Draft a follow-up email built on these angles">
                     <Sparkles size={13} /> Draft follow-up
                   </button>
                 )}
               </div>
+
+              {/* Expertise track — the structured, deal-advancing points */}
+              <div className="text-[11px] uppercase tracking-wide text-brand-muted mb-1.5 flex items-center gap-1.5"><Lightbulb size={12} className="text-brand-greenDark" /> Expertise — points to land</div>
               {angles.length > 0 ? (
                 <ul className="space-y-1.5">
                   {angles.map((ang) => (
@@ -292,7 +287,25 @@ export function ClientHub({
                   ))}
                 </ul>
               ) : (
-                <p className="text-sm text-brand-muted">No call points yet — log a call or paste a transcript and we’ll gather talking points for the next conversation.</p>
+                <p className="text-[13px] text-brand-muted">No call points yet — log a call or paste a transcript and we’ll gather talking points.</p>
+              )}
+
+              {/* Rapport track — warm, personal openers tailored to their business */}
+              <div className="text-[11px] uppercase tracking-wide text-brand-muted mt-4 mb-1.5 flex items-center gap-1.5"><HeartHandshake size={12} className="text-brand-greenDark" /> Rapport — questions that set us apart</div>
+              {rapport.length > 0 ? (
+                <ul className="space-y-1.5">
+                  {rapport.map((q) => (
+                    <li key={q} className="group flex items-start gap-2 rounded-lg px-2.5 py-2 bg-brand-surface border border-brand-line/70 hover:bg-brand-tint/50 transition">
+                      <HeartHandshake size={13} className="text-brand-greenDark mt-0.5 shrink-0" />
+                      <span className="text-[13px] leading-snug flex-1">{q}</span>
+                      <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-greenDark shrink-0 transition" onClick={() => copyAngle(q)} title="Copy">
+                        {copied === q ? <Check size={13} className="text-brand-green" /> : <Copy size={13} />}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[13px] text-brand-muted">Warm, personal openers tailored to their business will appear here as we learn about them — drawn from their website and your calls.</p>
               )}
             </section>
           </div>
