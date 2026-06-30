@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useCallback } from 'react';
 import { Sidebar, SECTION_LABEL, type Tab } from './components/Sidebar';
 import { Dashboard } from './components/Dashboard';
 import { DailyReview } from './components/DailyReview';
@@ -11,9 +11,11 @@ import { LoaSection } from './components/LoaSection';
 import { RfqSection } from './components/RfqSection';
 import { BillAnalysis } from './components/BillAnalysis';
 import { ClientTabBar } from './components/ClientTabBar';
+import { BackgroundTasksIndicator, BackgroundToasts } from './components/BackgroundTasks';
 import { AmbientBackground } from './components/AmbientBackground';
 import { WorkspaceProvider, useWorkspace } from './workspace/WorkspaceContext';
 import { ClientTabsProvider, useClientTabs } from './workspace/ClientTabsContext';
+import { BackgroundTasksProvider, type BgTask } from './workspace/BackgroundTasksContext';
 import { usePersisted } from './lib/usePersisted';
 
 // The document workspace pulls in TipTap + the chart/export libraries, so load it
@@ -53,16 +55,27 @@ function Shell({ section, setSection, collapsed, onToggleCollapse }: {
   // Client-work sections render wide; the market-intelligence sections stay capped.
   const wide = ['report', 'emails', 'bills', 'loa', 'rfq', 'documents'].includes(section);
 
+  // "Open" on a finished background task → jump to its client + the relevant section.
+  const onOpenTask = useCallback((task: BgTask) => {
+    if (task.clientId) tabs.openClient(task.clientId, task.clientName);
+    if (task.kind === 'bill') setSection('bills');
+    else if (task.clientId) setSection('report');
+  }, [tabs, setSection]);
+
   return (
+    <BackgroundTasksProvider onOpenTask={onOpenTask}>
     <div className="flex min-h-full">
       <AmbientBackground />
       <Sidebar section={section} onChange={setSection} collapsed={collapsed} onToggleCollapse={onToggleCollapse} docCount={ws.count} />
 
       <div className="relative z-10 flex-1 min-w-0 flex flex-col">
-        {/* Universal client-tab bar */}
+        {/* Universal client-tab bar + background-activity indicator */}
         <div className="h-[var(--topbar-h)] shrink-0 sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-brand-line flex items-center gap-3 px-3 lg:px-4">
           <ClientTabBar />
-          <span className="ml-auto text-[11px] uppercase tracking-wide text-brand-muted shrink-0 hidden sm:block pr-1">{SECTION_LABEL[section]}</span>
+          <div className="ml-auto flex items-center gap-2 shrink-0">
+            <span className="text-[11px] uppercase tracking-wide text-brand-muted hidden sm:block">{SECTION_LABEL[section]}</span>
+            <BackgroundTasksIndicator />
+          </div>
         </div>
 
         <main className={'flex-1 w-full px-5 lg:px-8 py-6 ' + (wide ? 'max-w-wide mx-auto 3xl:px-10' : 'max-w-content mx-auto')}>
@@ -102,5 +115,7 @@ function Shell({ section, setSection, collapsed, onToggleCollapse }: {
         </main>
       </div>
     </div>
+    <BackgroundToasts />
+    </BackgroundTasksProvider>
   );
 }

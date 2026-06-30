@@ -3,8 +3,9 @@ import {
   ReceiptText, UploadCloud, Loader2, Building2, Check, X, FileText, Sparkles,
   CheckCircle2, AlertCircle, Gauge, Plus, ArrowLeft, ScanLine,
 } from 'lucide-react';
-import { api, type ClientProfile, type ClientFile, type ClientMeter, type BillField, type ReportInputs } from '../lib/api';
+import { api, type ClientProfile, type ClientFile, type ClientMeter, type BillField, type BillAnalysisResult, type ReportInputs } from '../lib/api';
 import { getMeters, meterLabel } from '../lib/clientProfile';
+import { useBackgroundTasks } from '../workspace/BackgroundTasksContext';
 
 // Where each extracted bill field lands on the client record. `target` of 'meter.<x>'
 // goes onto the selected meter; a plain key goes onto client inputs; no target = shown
@@ -93,68 +94,92 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
   const client = useMemo(() => clients.find((c) => c.id === clientId) ?? null, [clients, clientId]);
   const meters = client ? getMeters(client.inputs as ReportInputs) : [];
 
-  // staged "analysing" ticker
+  // The slow extraction runs as a BACKGROUND task (so you can switch client / section
+  // freely). The component reflects this client's bill task: running → the analysing
+  // view; done → the review, hydrated from the task once.
+  const bg = useBackgroundTasks();
+  const billTask = clientId ? bg.latestFor(clientId, 'bill') : undefined;
+  const taskRunning = billTask?.status === 'running';
+  const taskError = billTask?.status === 'error' ? (billTask.error || 'Analysis failed.') : null;
+  const hydratedRef = useRef<string | null>(null);
+  const hydratedClientRef = useRef<string | null>(null); // which client the current review belongs to
   useEffect(() => {
-    if (phase !== 'analyzing') return;
+    if (billTask?.status === 'done' && hydratedRef.current !== billTask.id) {
+      const res = billTask.result as BillAnalysisResult;
+      const payload = (billTask.payload ?? {}) as { meterChoice?: string; uploaded?: ClientFile };
+      const v: Record<string, string> = {}; const a: Record<string, boolean> = {};
+      for (const f of res.fields) { v[f.key] = f.value; if (REGISTRY[f.key]?.target && !IDENTITY.has(f.key)) a[f.key] = true; }
+      setFields(res.fields); setValues(v); setApply(a);
+      if (payload.meterChoice) setMeterChoice(payload.meterChoice);
+      if (payload.uploaded) setUploaded(payload.uploaded);
+      setPhase('review'); hydratedRef.current = billTask.id; hydratedClientRef.current = billTask.clientId ?? clientId;
+    }
+  }, [billTask?.id, billTask?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Switching the client picker must NOT carry a hydrated review onto another client
+  // (it would approve client A's bill onto B). Tear the review down; the old task keeps
+  // its file so switching back re-hydrates it. Only resets when the id actually changes.
+  const changeClient = (newId: string) => {
+    if (newId === clientId) return;
+    hydratedRef.current = null; hydratedClientRef.current = null;
+    setPhase('setup'); setFields([]); setValues({}); setApply({}); setUploaded(null); setActiveKey(null); setErr(null); setDoneMsg('');
+    setMeterChoice(''); setClientId(newId);
+  };
+
+  // staged "analysing" ticker — driven by the running background task
+  useEffect(() => {
+    if (!taskRunning) return;
     setStep(0);
     const t = setInterval(() => setStep((s) => Math.min(s + 1, ANALYSING_STEPS.length - 1)), 1100);
     return () => clearInterval(t);
-  }, [phase]);
+  }, [taskRunning]);
 
   // scroll the active highlight into view when switching fields on the text tab
   useEffect(() => { if (leftTab === 'text') markRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, [activeKey, leftTab]);
 
-  // On teardown (switching client tab / section remounts this), drop an un-approved
-  // uploaded bill so it isn't orphaned on the server. A done (approved) bill is kept.
-  const uploadedRef = useRef<ClientFile | null>(null); uploadedRef.current = uploaded;
-  const phaseRef = useRef(phase); phaseRef.current = phase;
-  useEffect(() => () => {
-    if (uploadedRef.current && phaseRef.current !== 'done') api.files.remove(uploadedRef.current.id).catch(() => {});
-  }, []);
-
   const analyse = async () => {
     if (!file || !client || !meterChoice) return;
     if (file.size > MAX_BILL_BYTES) { setErr('That bill is too large — please use a file under ~6 MB.'); return; }
-    setErr(null); setPhase('analyzing');
-    // Drop any file left over from a previous (failed/retried) attempt so we don't orphan it.
-    if (uploaded) { api.files.remove(uploaded.id).catch(() => {}); setUploaded(null); }
-    let savedId: string | null = null;
+    setErr(null);
+    // Upload now (quick), guard scanned PDFs, then enqueue the slow extraction as a
+    // background task and clear the form — you can navigate anywhere while it runs.
+    let saved: ClientFile;
     try {
       const base64 = await fileToBase64(file);
-      const saved = await api.files.upload({ name: file.name, mime: file.type, dataBase64: base64, clientProfileId: client.id });
-      savedId = saved.id; setUploaded(saved);
-      // A non-image file with no extractable text layer (a scanned/photographed PDF, an
-      // image-only Word doc) gives the swarm nothing to read — and we can't rasterise it
-      // to feed vision. Guide the user to re-upload it as a photo so vision can read it,
-      // rather than failing with a generic message.
+      saved = await api.files.upload({ name: file.name, mime: file.type, dataBase64: base64, clientProfileId: client.id });
       const extracted = (saved.extractedText || '').trim();
       if (!extracted && !isImage(file.type)) {
-        api.files.remove(saved.id).catch(() => {}); setUploaded(null);
+        api.files.remove(saved.id).catch(() => {});
         setErr('This file has no readable text layer — it looks like a scanned or image-only document. Please re-upload the bill as a photo or screenshot (JPG/PNG) so the analyser can read it visually.');
-        setPhase('setup'); return;
+        return;
       }
-      const res = await api.bill.analyze({
-        text: extracted || undefined,
-        image: isImage(file.type) ? { base64, mime: file.type } : undefined,
+      const fileType = file.type;
+      bg.run<BillAnalysisResult>({
+        kind: 'bill',
+        label: `Bill analysis — ${file.name}`,
+        clientId: client.id,
+        clientName: client.name,
+        payload: { meterChoice, uploaded: saved },
+        fn: async () => {
+          const res = await api.bill.analyze({ text: extracted || undefined, image: isImage(fileType) ? { base64, mime: fileType } : undefined });
+          const failed = (res.error && res.provider !== 'claude' && res.provider !== 'openai') || !res.fields.length;
+          if (failed) { api.files.remove(saved.id).catch(() => {}); throw new Error(res.error || 'No fields could be read from this bill — try a clearer scan or a PDF with selectable text.'); }
+          return res;
+        },
       });
-      const failed = (res.error && res.provider !== 'claude' && res.provider !== 'openai') || !res.fields.length;
-      if (failed) {
-        api.files.remove(saved.id).catch(() => {}); setUploaded(null);
-        setErr(res.error || 'No fields could be read from this bill — try a clearer scan or a PDF with selectable text.');
-        setPhase('setup'); return;
-      }
-      const v: Record<string, string> = {}; const a: Record<string, boolean> = {};
-      for (const f of res.fields) { v[f.key] = f.value; if (REGISTRY[f.key]?.target && !IDENTITY.has(f.key)) a[f.key] = true; }
-      setFields(res.fields); setValues(v); setApply(a);
-      setPhase('review');
+      setFile(null); setMeterChoice(''); setUploaded(null);
     } catch (e) {
-      if (savedId) api.files.remove(savedId).catch(() => {});
-      setUploaded(null); setErr(String((e as Error).message)); setPhase('setup');
+      setErr(String((e as Error).message));
     }
   };
 
   const approve = async () => {
     if (!client || !uploaded) return;
+    // Backstop: never write a review hydrated for one client onto another.
+    if (hydratedClientRef.current && hydratedClientRef.current !== client.id) {
+      setErr('The bill under review is for a different client — start a new analysis.');
+      return;
+    }
     setErr(null);
     const get = (key: string) => (apply[key] ? (values[key] ?? '').trim() : '');
     // Re-fetch the record so we merge onto the FRESHEST inputs/tracker — never clobber
@@ -219,14 +244,17 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
       const detail = fields.filter((f) => apply[f.key]).map((f) => `• ${REGISTRY[f.key]?.label ?? f.key}: ${values[f.key]}`).join('\n');
       await api.profiles.addActivity(client.id, { type: 'file', title: `Bill analysed — ${get('supplier') || values.supplier || 'energy bill'}`, detail, meta: { fileId: uploaded.id } });
       setDoneMsg(`Saved to ${client.name} — record updated, bill filed, “Bill received” ticked.`);
+      if (billTask) bg.dismiss(billTask.id); // approved → clear the finished task
       setPhase('done');
     } catch (e) { setErr(String((e as Error).message)); }
   };
 
   const reset = () => {
-    // Abandoning the review without approving → drop the unsaved bill (a done/approved
-    // bill is kept).
+    // Abandoning the review without approving → drop the unsaved bill + its task (a
+    // done/approved bill is kept).
     if (phase === 'review' && uploaded) api.files.remove(uploaded.id).catch(() => {});
+    if (billTask) bg.dismiss(billTask.id);
+    hydratedRef.current = null; hydratedClientRef.current = null;
     setPhase('setup'); setFile(null); setUploaded(null); setFields([]); setValues({}); setApply({});
     setActiveKey(null); setMeterChoice(''); setErr(null); setDoneMsg('');
   };
@@ -242,18 +270,18 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
     </div>
   );
 
-  if (phase === 'setup' || phase === 'analyzing') {
+  if (taskRunning || phase === 'setup') {
     return (
       <div className="max-w-2xl mx-auto">
         {header}
         <section className="card p-5 mt-4 space-y-4">
-          {phase === 'analyzing' ? (
+          {taskRunning ? (
             <div className="py-10 text-center">
               <div className="relative mx-auto h-14 w-14 mb-4">
                 <ScanLine size={56} className="text-brand-green animate-pulse" />
               </div>
               <p className="text-sm font-medium">{ANALYSING_STEPS[step]}</p>
-              <p className="text-xs text-brand-muted mt-1">Running the bill-analysis swarm — supplier, meter, rates &amp; contract in parallel.</p>
+              <p className="text-xs text-brand-muted mt-1">Running in the background — switch to any client or section; we&rsquo;ll notify you when this bill is ready to review.</p>
             </div>
           ) : (
             <>
@@ -270,7 +298,7 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
               {/* Client */}
               <div>
                 <label className="label mb-1.5 block">Assign to client</label>
-                <select className="input" value={clientId} onChange={(e) => { setClientId(e.target.value); setMeterChoice(''); }}>
+                <select className="input" value={clientId} onChange={(e) => changeClient(e.target.value)}>
                   <option value="">Select a client…</option>
                   {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
@@ -287,7 +315,7 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
                   {!meters.length && <p className="text-[11px] text-brand-muted mt-1">This client has no meters yet — the bill will create one.</p>}
                 </div>
               )}
-              {err && <p className="text-sm text-up flex items-center gap-1.5"><AlertCircle size={14} /> {err}</p>}
+              {(err || taskError) && <p className="text-sm text-up flex items-center gap-1.5"><AlertCircle size={14} /> {err || taskError}{taskError && billTask && <button className="underline ml-1" onClick={() => bg.dismiss(billTask.id)}>dismiss</button>}</p>}
               <button className="btn-primary w-full justify-center" onClick={analyse} disabled={!file || !client || !meterChoice}>
                 <Sparkles size={16} /> Analyse bill
               </button>
