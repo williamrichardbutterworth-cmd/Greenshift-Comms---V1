@@ -54,6 +54,7 @@
 | `363b9cc` | **Ambient background** — subtle animated green ambient glow behind the app (`AmbientBackground.tsx`, fixed canvas z-0, content z-10, pointer-events-none, reduced-motion-aware). Decorative only. |
 | `a6b3241` | **Universal client-tab navigation — Phase 1** — the **client** is the central unit: a top **client-tab bar** (permanent **Free** tab + open client tabs) scopes every client-work section to one client; nav reordered to the job flow (Clients·Emails·Bill Analysis·LOA·RFQ·**Reports** [was Documents]); **Emails** became a section; client hub got a 3-step **"Key steps"** overview. 12-agent review → 7 fixes. *(section below.)* |
 | `5adadc4` | **Background-task system — Phase 2** — long ops run in the background (provider at the Shell root, survives navigation) with a top-bar **activity indicator + tray + completion toasts**; **bill analysis** is the flagship (enqueue extraction → navigate freely → notify → hydrated review). 14-agent review → 2 fixes. *(section below.)* |
+| `aebbcf9` | **Calendar — Phase 1** — intelligent/agentic Calendar tab: **detected commitments** mined from the client timeline (provenance-gated, idempotent, tombstone-safe) + **live renewal markers** off each meter's contract-end; Today / Month / **Yearly renewals + value-at-risk** views; auto-scans the active client on open. 24-agent review → 16 fixes. ⚠️ deploy needs `schema.sql` re-run (`calendar_events`). *(Ready-to-push section below.)* |
 
 ---
 
@@ -114,7 +115,11 @@
 
 ## Ready to push 🟡
 
-### ⭐ Calendar — Phase 1 (intelligent agentic calendar; built + adversarially reviewed, **committed, NOT pushed**)
+_Nothing pending — everything through `aebbcf9` is pushed to `main` (2026-06-30). The Calendar Phase 1 detail is recorded just below; next work is **Calendar Phase 2** (Next up item 0)._
+
+---
+
+### ⭐ Calendar — Phase 1 (intelligent agentic calendar; built + adversarially reviewed, **PUSHED to main `aebbcf9`, 2026-06-30**)
 
 > A new **Calendar** nav tab (first in Client work). The calendar is a *projection of facts already in the CRM*, never a manual diary: **detected commitments** mined from the client timeline + **live-computed renewal markers** off each meter's contract-end. Automatic — auto-scans the active client on open via `bg.run`; no manual entry needed (a minimal "Add" is there as a fallback).
 
