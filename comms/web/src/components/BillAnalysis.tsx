@@ -87,7 +87,10 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
   const [err, setErr] = useState<string | null>(null);
   const [doneMsg, setDoneMsg] = useState('');
   const [dragOver, setDragOver] = useState(false);
+  const [previewLoaded, setPreviewLoaded] = useState(false); // bill preview rendered → start the synced scan + extraction
   const markRef = useRef<HTMLElement | null>(null);
+  // Extraction params stashed at upload; the bg task starts once the preview loads.
+  const pendingRef = useRef<{ extracted: string; base64: string; fileType: string; saved: ClientFile; meterChoice: string; clientId: string; clientName: string } | null>(null);
 
   useEffect(() => { api.profiles.list().then(setClients).catch(() => {}); }, []);
   // With a client tab active, assume the bill is for that client (still changeable).
@@ -121,7 +124,7 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
   // error + dismiss surfaces (the failing task already removed the file server-side).
   // Without this, phase stays 'analyzing' and the UI falls through to an empty review.
   useEffect(() => {
-    if (billTask?.status === 'error' && phase === 'analyzing') { setPhase('setup'); setUploaded(null); }
+    if (billTask?.status === 'error' && phase === 'analyzing') { setPhase('setup'); setUploaded(null); setPreviewLoaded(false); pendingRef.current = null; }
   }, [billTask?.status, billTask?.id, phase]);
 
   // Switching the client picker must NOT carry a hydrated review onto another client
@@ -129,8 +132,8 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
   // its file so switching back re-hydrates it. Only resets when the id actually changes.
   const changeClient = (newId: string) => {
     if (newId === clientId) return;
-    hydratedRef.current = null; hydratedClientRef.current = null;
-    setPhase('setup'); setFields([]); setValues({}); setApply({}); setUploaded(null); setActiveKey(null); setErr(null); setDoneMsg('');
+    hydratedRef.current = null; hydratedClientRef.current = null; pendingRef.current = null;
+    setPhase('setup'); setFields([]); setValues({}); setApply({}); setUploaded(null); setPreviewLoaded(false); setActiveKey(null); setErr(null); setDoneMsg('');
     setMeterChoice(''); setClientId(newId);
   };
 
@@ -161,34 +164,57 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
         setErr('This file has no readable text layer — it looks like a scanned or image-only document. Please re-upload the bill as a photo or screenshot (JPG/PNG) so the analyser can read it visually.');
         return;
       }
-      const fileType = file.type;
-      // Keep the uploaded file on screen so the "analysing" view can show the bill
-      // with a scanning overlay while extraction runs (the done-effect re-hydrates it).
-      setUploaded(saved); setPhase('analyzing');
-      bg.run<BillAnalysisResult>({
-        kind: 'bill',
-        label: `Bill analysis — ${file.name}`,
-        clientId: client.id,
-        clientName: client.name,
-        payload: { meterChoice, uploaded: saved },
-        fn: async () => {
-          let res: BillAnalysisResult;
-          try {
-            res = await api.bill.analyze({ text: extracted || undefined, image: isImage(fileType) ? { base64, mime: fileType } : undefined });
-          } catch (e) {
-            api.files.remove(saved.id).catch(() => {}); // don't orphan the upload on a transport failure
-            throw e;
-          }
-          const failed = (res.error && res.provider !== 'claude' && res.provider !== 'openai') || !res.fields.length;
-          if (failed) { api.files.remove(saved.id).catch(() => {}); throw new Error(res.error || 'No fields could be read from this bill — try a clearer scan or a PDF with selectable text.'); }
-          return res;
-        },
-      });
+      // Show the bill first; the slow extraction starts only once the preview has
+      // rendered, so the green scan line is synced with the actual analysis.
+      pendingRef.current = { extracted, base64, fileType: file.type, saved, meterChoice, clientId: client.id, clientName: client.name };
+      setUploaded(saved); setPreviewLoaded(false); setPhase('analyzing');
       setFile(null); setMeterChoice('');
     } catch (e) {
       setErr(String((e as Error).message));
     }
   };
+
+  // Kick off the background extraction once the bill preview has rendered, so the
+  // scan animation and the data extraction start together. Fires at most once.
+  // `startExtraction` is IDENTITY-STABLE (reads bg via a ref) so the fallback timer
+  // and the unmount safety-net below aren't reset by unrelated provider re-renders.
+  const bgRef = useRef(bg); bgRef.current = bg;
+  const startExtraction = useCallback(() => {
+    const p = pendingRef.current;
+    if (!p) return;
+    pendingRef.current = null;
+    setPreviewLoaded(true);
+    bgRef.current.run<BillAnalysisResult>({
+      kind: 'bill',
+      label: `Bill analysis — ${p.saved.name}`,
+      clientId: p.clientId,
+      clientName: p.clientName,
+      payload: { meterChoice: p.meterChoice, uploaded: p.saved },
+      fn: async () => {
+        let res: BillAnalysisResult;
+        try {
+          res = await api.bill.analyze({ text: p.extracted || undefined, image: isImage(p.fileType) ? { base64: p.base64, mime: p.fileType } : undefined });
+        } catch (e) {
+          api.files.remove(p.saved.id).catch(() => {}); // don't orphan the upload on a transport failure
+          throw e;
+        }
+        const failed = (res.error && res.provider !== 'claude' && res.provider !== 'openai') || !res.fields.length;
+        if (failed) { api.files.remove(p.saved.id).catch(() => {}); throw new Error(res.error || 'No fields could be read from this bill — try a clearer scan or a PDF with selectable text.'); }
+        return res;
+      },
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Safety net: if the preview's onLoad never fires, start extraction anyway.
+  useEffect(() => {
+    if (phase !== 'analyzing' || !pendingRef.current) return;
+    const t = setTimeout(() => startExtraction(), 2500);
+    return () => clearTimeout(t);
+  }, [phase, startExtraction]);
+
+  // If the user navigates away (unmount) before the preview loaded, still enqueue the
+  // extraction so the already-uploaded bill is never silently dropped.
+  useEffect(() => () => { if (pendingRef.current) startExtraction(); }, [startExtraction]);
 
   const approve = async () => {
     if (!client || !uploaded) return;
@@ -271,8 +297,8 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
     // done/approved bill is kept).
     if (phase === 'review' && uploaded) api.files.remove(uploaded.id).catch(() => {});
     if (billTask) bg.dismiss(billTask.id);
-    hydratedRef.current = null; hydratedClientRef.current = null;
-    setPhase('setup'); setFile(null); setUploaded(null); setFields([]); setValues({}); setApply({});
+    hydratedRef.current = null; hydratedClientRef.current = null; pendingRef.current = null;
+    setPhase('setup'); setFile(null); setUploaded(null); setPreviewLoaded(false); setFields([]); setValues({}); setApply({});
     setActiveKey(null); setMeterChoice(''); setErr(null); setDoneMsg('');
   };
 
@@ -287,28 +313,30 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
     </div>
   );
 
-  // ── analysing: show the uploaded bill with a green scanning sweep while extracting ──
-  if (taskRunning && uploaded) {
+  // ── analysing: the bill loads, then a single green line scans it top-to-bottom in
+  // sync with the extraction (which only starts once the preview has rendered). ──
+  if (phase === 'analyzing' && uploaded) {
     return (
       <div className="space-y-3">
         {header}
         <div className="grid lg:grid-cols-2 gap-4 items-start">
-          {/* The bill, with the scan overlay */}
+          {/* The bill, with the synced scan line */}
           <section className="card p-0 overflow-hidden lg:sticky lg:top-[calc(var(--topbar-h)+12px)]">
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-brand-line">
               <ScanLine size={15} className="text-brand-green shrink-0" />
               <h3 className="text-sm font-semibold flex-1 truncate">{uploaded.name}</h3>
-              <span className="text-[11px] text-brand-greenDark">Scanning…</span>
+              <span className="text-[11px] text-brand-greenDark">{previewLoaded ? 'Scanning…' : 'Loading…'}</span>
             </div>
-            <div className="relative h-[calc(100vh-var(--topbar-h)-150px)] min-h-[460px] bg-[#f4f3f0]">
+            <div className="relative h-[calc(100vh-var(--topbar-h)-150px)] min-h-[460px] bg-[#f4f3f0] grid place-items-center overflow-hidden p-3">
               {isImage(uploaded.mime)
-                ? <div className="h-full overflow-auto p-3"><img src={api.files.downloadUrl(uploaded.id)} alt="bill" className="w-full rounded shadow-sm" /></div>
-                : <iframe src={api.files.downloadUrl(uploaded.id)} title="bill" className="w-full h-full border-0" />}
-              {/* green scanning sweep (sits over the preview, never blocks it) */}
-              <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                <div className="absolute inset-x-0 top-0 h-28 animate-scan" style={{ background: 'linear-gradient(to bottom, rgba(64,168,0,0) 0%, rgba(64,168,0,0.12) 75%, rgba(64,168,0,0.26) 100%)' }} />
-                <div className="absolute inset-x-0 top-28 h-[2px] animate-scan bg-brand-green" style={{ boxShadow: '0 0 14px 3px rgba(64,168,0,0.55)' }} />
-              </div>
+                ? <img src={api.files.downloadUrl(uploaded.id)} alt="bill" onLoad={startExtraction} onError={startExtraction} className="max-h-full max-w-full object-contain rounded shadow-sm" />
+                : <iframe src={api.files.downloadUrl(uploaded.id)} title="bill" onLoad={startExtraction} className="w-full h-full border-0" />}
+              {/* a single green line sweeping the whole bill, only once the preview is up */}
+              {previewLoaded && (
+                <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                  <div className="absolute inset-x-0 h-[2px] bg-brand-green animate-scan" style={{ boxShadow: '0 0 12px 2px rgba(64,168,0,0.5)' }} />
+                </div>
+              )}
             </div>
           </section>
 
@@ -317,17 +345,20 @@ export function BillAnalysis({ initialClientId }: { initialClientId?: string } =
             <div className="flex items-center gap-2.5 mb-3">
               <span className="grid place-items-center h-9 w-9 rounded-lg bg-brand-tint text-brand-greenDark shrink-0"><Loader2 size={17} className="animate-spin" /></span>
               <div className="min-w-0">
-                <div className="text-sm font-semibold">Analysing the bill</div>
+                <div className="text-sm font-semibold">{previewLoaded ? 'Analysing the bill' : 'Loading the bill…'}</div>
                 <p className="text-[12px] text-brand-muted truncate">Reading {client?.name ? `${client.name}’s` : 'the'} bill into the record.</p>
               </div>
             </div>
             <ol className="space-y-2">
-              {ANALYSING_STEPS.map((s, i) => (
-                <li key={i} className={'flex items-center gap-2 text-sm transition ' + (i < step ? 'text-brand-muted' : i === step ? 'text-brand-ink font-medium' : 'text-brand-muted/40')}>
-                  {i < step ? <CheckCircle2 size={15} className="text-brand-green shrink-0" /> : i === step ? <Loader2 size={15} className="text-brand-greenDark animate-spin shrink-0" /> : <Circle size={15} className="shrink-0" />}
-                  {s}
-                </li>
-              ))}
+              {ANALYSING_STEPS.map((s, i) => {
+                const activeStep = previewLoaded && i === step;
+                return (
+                  <li key={i} className={'flex items-center gap-2 text-sm transition ' + (i < step ? 'text-brand-muted' : activeStep ? 'text-brand-ink font-medium' : 'text-brand-muted/40')}>
+                    {i < step ? <CheckCircle2 size={15} className="text-brand-green shrink-0" /> : activeStep ? <Loader2 size={15} className="text-brand-greenDark animate-spin shrink-0" /> : <Circle size={15} className="shrink-0" />}
+                    {s}
+                  </li>
+                );
+              })}
             </ol>
             <p className="text-[11px] text-brand-muted mt-4">This runs in the background — you can switch to any client or section and we’ll have it ready to review.</p>
           </section>

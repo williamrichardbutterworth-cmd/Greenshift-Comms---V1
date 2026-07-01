@@ -94,6 +94,8 @@ export interface ReportInputs {
   reportKind?: string;
   /** The client this document belongs to (links a project back to its CRM record). */
   clientProfileId?: string;
+  /** Persisted rapport-opener questions for the client hub's talk track. */
+  rapport?: string[];
 }
 
 // ── Document templates (user-definable) ──

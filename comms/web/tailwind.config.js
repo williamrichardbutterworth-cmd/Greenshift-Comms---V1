@@ -29,15 +29,16 @@ export default {
       boxShadow: {
         soft: '0 1px 2px rgba(43,42,46,0.04), 0 8px 24px rgba(43,42,46,0.06)',
       },
-      // Vertical "scanning" sweep used over the bill preview during analysis.
+      // A single green line sweeping top→bottom over the bill preview during analysis
+      // (driven by `top`, so it traverses the full height of its container).
       keyframes: {
         scan: {
-          '0%': { transform: 'translateY(-110%)' },
-          '100%': { transform: 'translateY(560%)' },
+          '0%': { top: '0%' },
+          '100%': { top: '100%' },
         },
       },
       animation: {
-        scan: 'scan 2.4s cubic-bezier(0.45,0,0.55,1) infinite',
+        scan: 'scan 2.6s ease-in-out infinite',
       },
     },
   },

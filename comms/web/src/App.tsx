@@ -87,14 +87,10 @@ function Shell({ section, setSection, collapsed, onToggleCollapse }: {
           {section === 'brief' && <DailyReview />}
           {section === 'news' && <NewsFeed />}
 
-          {/* Calendar scopes to the active client (its detected commitments +
-              renewal markers) or shows the whole book on the Free tab. */}
+          {/* The Calendar is one central unit — the whole book's commitments &
+              renewals, independent of which client tab is active. */}
           {section === 'calendar' && (
-            <CalendarSection
-              key={activeClientId ?? 'free'}
-              clientId={activeClientId ?? undefined}
-              onOpenClient={(id, name) => { tabs.openClient(id, name); setSection('report'); }}
-            />
+            <CalendarSection onOpenClient={(id, name) => { tabs.openClient(id, name); setSection('report'); }} />
           )}
 
           {section === 'report' && (activeClientId ? (

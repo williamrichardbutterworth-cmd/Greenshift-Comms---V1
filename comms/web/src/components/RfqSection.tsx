@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeft, Building2, Sparkles, Loader2, Download, ClipboardList, Globe, MessageSquareText, Check, Save,
+  ArrowLeft, Building2, Sparkles, Loader2, Download, ClipboardList, MessageSquareText, Check, Save,
   FileSignature, ReceiptText, CheckCircle2, Circle, PhoneCall, Lightbulb, AlertTriangle,
 } from 'lucide-react';
 import { api, type ClientProfile, type ReportInputs, type ClientFile, type ClientActivity } from '../lib/api';
@@ -72,26 +72,26 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [activities, setActivities] = useState<ClientActivity[]>(() => client.activities ?? []);
   const [gameplan, setGameplan] = useState<Record<string, { cue: string; ask: string }>>({});
-  const [busy, setBusy] = useState<null | 'web' | 'note' | 'gen' | 'save'>(null);
+  const [busy, setBusy] = useState<null | 'note' | 'gen' | 'save'>(null);
   const [prepping, setPrepping] = useState(false); // background call-prep status (decoupled from `busy` so it never locks Save/Generate)
   const [ready, setReady] = useState(false);        // entry hydrate complete → safe to auto-prep on the freshest data
-  const [prepNonce, setPrepNonce] = useState(0);    // bump to force a re-prep (e.g. after a website pull)
   const [prepFailed, setPrepFailed] = useState(false); // last auto-prep hit a transient failure (shown + retried)
   const [prepRetry, setPrepRetry] = useState(0);    // bump to force a bounded retry after a failure
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [url, setUrl] = useState<string>(() => String((client.inputs as Record<string, unknown>).website ?? '').trim());
   const [noteText, setNoteText] = useState('');
   const dirty = useRef(false);
   const hydrated = useRef(false); // one-shot: the entry refetch may apply only ONCE, never after an edit
   const inputsRef = useRef(inputs); inputsRef.current = inputs;
   const activitiesRef = useRef(activities); activitiesRef.current = activities;
   const filesRef = useRef(files); filesRef.current = files;
-  // Auto-prep bookkeeping: a stable signature of what would change the brief (new
-  // activity / bill / forced nonce), a guard so two preps never overlap, and a ref
-  // to the live signature so a prep that finishes stale can catch up.
-  const prepSig = `${client.id}|${activities.length}|${files.length}|${prepNonce}`;
+  // Auto-prep bookkeeping: a stable signature of what would change the brief (a new
+  // activity / bill), a guard so two preps never overlap, and a ref to the live
+  // signature so a prep that finishes stale can catch up. The prep result is saved
+  // onto the client record (inputs.rfqPrep), so re-opening shows it WITHOUT re-running
+  // — it only re-preps when this signature changes (the client genuinely updated).
+  const prepSig = `${client.id}|${activities.length}|${files.length}`;
   const prepSigRef = useRef(prepSig); prepSigRef.current = prepSig;
   const lastPrepSig = useRef('');
   const prepRunningRef = useRef(false);
@@ -108,9 +108,15 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
       api.files.list({ clientProfileId: client.id }).catch(() => [] as ClientFile[]),
     ]).then(([fresh, f]) => {
       if (cancelled) return;
-      if (!hydrated.current && !dirty.current) setInputs(fresh.inputs as ReportInputs);
+      const fi = fresh.inputs as ReportInputs;
+      if (!hydrated.current && !dirty.current) setInputs(fi);
       setActivities(fresh.activities ?? []);
       setFiles(f);
+      // Hydrate the saved call-prep so re-opening shows it without re-running; its
+      // signature gates the auto-prep effect (re-runs only when the client changes).
+      const savedPrep = (fi as Record<string, unknown>).rfqPrep as { gameplan?: Record<string, { cue: string; ask: string }>; sig?: string } | undefined;
+      if (savedPrep?.gameplan) setGameplan(savedPrep.gameplan);
+      lastPrepSig.current = savedPrep?.sig ?? '';
       hydrated.current = true; setReady(true);
     }).catch(() => { hydrated.current = true; setReady(true); setNote('Couldn’t refresh this client — working from the last loaded details.'); });
     return () => { cancelled = true; };
@@ -157,37 +163,30 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
     catch (e) { setErr(String((e as Error).message)); } finally { setBusy(null); }
   };
 
-  const pullWebsite = async () => {
-    if (!url.trim()) { setErr('Add the company website first.'); return; }
-    setBusy('web'); setErr(null); setNote(null);
-    try {
-      const res = await api.rfq.scrape(url, rfqAllValues(inputsRef.current));
-      if (res.error) setErr(res.error);
-      else { const { inputs: merged, filled } = applyRfqExtract(inputsRef.current, res.fields, 'website'); update(merged); setPrepNonce((n) => n + 1); setNote(filled ? `Pulled ${filled} field${filled === 1 ? '' : 's'} from the website.` : 'Nothing new found on the website.'); }
-    } catch (e) { setErr(String((e as Error).message)); } finally { setBusy(null); }
-  };
-
   // Prep the call from everything the client profile already holds: fill what we can, then
   // brief the agent on each remaining question with a relevant cue + a way to ask it.
   // Runs in the background (own `prepping` status, never touches `busy`); `silent`
   // suppresses the success note for automatic runs. A guard stops overlapping runs.
   const prepCall = async (acts: ClientActivity[] = activitiesRef.current, opts: { silent?: boolean } = {}) => {
     if (prepRunningRef.current) return;
-    prepRunningRef.current = true; lastPrepSig.current = prepSigRef.current;
+    const runSig = prepSigRef.current;
+    prepRunningRef.current = true; lastPrepSig.current = runSig;
     setPrepping(true); setErr(null); if (!opts.silent) setNote(null);
     let extractFailed = false, gameplanFailed = false, threw = false;
     try {
-      let merged = inputsRef.current;
-      const ctx = buildRfqContext(merged, acts);
+      const ctx = buildRfqContext(inputsRef.current, acts);
       let filled = 0;
+      let exFields: Record<string, string> | null = null;
       if (ctx.trim()) {
-        const ex = await api.rfq.extract(ctx, rfqAllValues(merged));
+        const ex = await api.rfq.extract(ctx, rfqAllValues(inputsRef.current));
         if (ex.error) { if (!opts.silent) setErr(ex.error); extractFailed = true; }
-        else { const r = applyRfqExtract(merged, ex.fields, 'transcript'); merged = r.inputs; filled = r.filled; }
+        else exFields = ex.fields;
       }
-      // Reflect extracted values in the form. A SILENT (automatic) prep must NOT mark
-      // the record dirty — opening a client shouldn't schedule an unprompted server
-      // write; the values still persist when the user next edits, saves or generates.
+      // Re-read the LIVE ref — the user may have typed during the extract await — and
+      // merge the extracted fields onto it. applyRfqExtract only fills BLANK fields, so
+      // a mid-run edit is never overwritten. A silent prep never marks the record dirty.
+      let merged = inputsRef.current;
+      if (exFields) { const r = applyRfqExtract(merged, exFields, 'transcript'); merged = r.inputs; filled = r.filled; }
       if (merged !== inputsRef.current) {
         if (opts.silent) { inputsRef.current = merged; hydrated.current = true; setInputs(merged); }
         else update(merged);
@@ -199,17 +198,26 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
         const v = view.value || (f.key === 'billsAvailable' && filesRef.current.length ? 'Yes' : '');
         return !v.trim();
       });
+      let finalGameplan: Record<string, { cue: string; ask: string }> | null = null;
       if (!missing.length) {
+        finalGameplan = {};
         setGameplan({}); // nothing left to brief — clear any stale cues
       } else if (ctx.trim() && !extractFailed) {
         const gp = await api.rfq.gameplan(buildRfqContext(merged, acts), missing.map((f) => ({ key: f.key, question: f.question })));
         if (gp.error) { gameplanFailed = true; if (!opts.silent) setErr(gp.error); }
-        else { const map: Record<string, { cue: string; ask: string }> = {}; for (const it of gp.items) if (it.cue || it.ask) map[it.key] = { cue: it.cue, ask: it.ask }; setGameplan(map); }
+        else { const map: Record<string, { cue: string; ask: string }> = {}; for (const it of gp.items) if (it.cue || it.ask) map[it.key] = { cue: it.cue, ask: it.ask }; finalGameplan = map; setGameplan(map); }
+      }
+      // Save the prep onto the client record (extracted fields + the brief), keyed by
+      // the signature, so re-opening shows it without re-running.
+      if (!extractFailed && !gameplanFailed && finalGameplan !== null) {
+        const persistInputs = { ...inputsRef.current, rfqPrep: { gameplan: finalGameplan, sig: runSig } } as ReportInputs;
+        inputsRef.current = persistInputs; hydrated.current = true; setInputs(persistInputs);
+        api.profiles.update(client.id, { inputs: persistInputs }).catch(() => {});
       }
       if (!opts.silent && !extractFailed && !gameplanFailed) {
         setNote(ctx.trim()
           ? `Filled ${filled} from this client’s history${missing.length ? `; briefed you on ${missing.length} still to ask.` : '.'}`
-          : 'No history on this client yet — log a call note or pull from the website to build the brief.');
+          : 'No history on this client yet — paste a call transcript or note below to build the brief.');
       }
     } catch (e) { threw = true; if (!opts.silent) setErr(String((e as Error).message)); }
     finally {
@@ -312,19 +320,13 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
           </div>
         </div>
 
-        {/* Sources that feed the brief: paste what they said, or pull the website */}
-        <div className="grid sm:grid-cols-2 gap-3 mt-3 pt-3 border-t border-brand-line">
-          <div className="rounded-lg border border-brand-line bg-brand-surface/40 p-3 flex flex-col">
+        {/* Source that feeds the brief: paste what they said on the call */}
+        <div className="mt-3 pt-3 border-t border-brand-line">
+          <div className="rounded-lg border border-brand-line bg-brand-surface/40 p-3">
             <div className="text-[12px] font-medium text-brand-ink flex items-center gap-1.5 mb-1"><MessageSquareText size={14} className="text-brand-greenDark" /> Call transcript or note</div>
             <p className="text-[11px] text-brand-muted mb-2">Paste what they said — it’s saved to the timeline and fills the form automatically.</p>
-            <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} rows={5} placeholder="Type or paste the call…" className="input !py-2 text-sm resize-y flex-1" />
-            <button onClick={logNote} className="btn-ghost !py-1.5 mt-2 w-full justify-center" disabled={!!busy || !noteText.trim()}>{busy === 'note' ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Save &amp; fill from this</button>
-          </div>
-          <div className="rounded-lg border border-brand-line bg-brand-surface/40 p-3 flex flex-col">
-            <div className="text-[12px] font-medium text-brand-ink flex items-center gap-1.5 mb-1"><Globe size={14} className="text-brand-greenDark" /> Company website</div>
-            <p className="text-[11px] text-brand-muted mb-2">Pull public details from their site to top up the form.</p>
-            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="acme.co.uk" className="input !py-2 text-sm" />
-            <button onClick={pullWebsite} className="btn-ghost !py-1.5 mt-2 w-full justify-center" disabled={!!busy || !url.trim()}>{busy === 'web' ? <Loader2 size={15} className="animate-spin" /> : <Globe size={15} />} Pull from website</button>
+            <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)} rows={4} placeholder="Type or paste the call…" className="input !py-2 text-sm resize-y" />
+            <button onClick={logNote} className="btn-ghost !py-1.5 mt-2 w-full sm:w-auto justify-center" disabled={!!busy || !noteText.trim()}>{busy === 'note' ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Save &amp; fill from this</button>
           </div>
         </div>
       </section>

@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, AlertTriangle, TrendingUp, Loader2, CircleHelp, Repeat,
 } from 'lucide-react';
 import {
-  api, type ClientProfile, type CalendarEvent, type CalendarScanResult, type ReportInputs, type CalendarKind,
+  api, type ClientProfile, type CalendarEvent, type ReportInputs, type CalendarKind,
 } from '../lib/api';
 import { getMeters, meterLabel } from '../lib/clientProfile';
 import { useBackgroundTasks } from '../workspace/BackgroundTasksContext';
@@ -60,8 +60,7 @@ function effectiveStatus(ev: CalendarEvent | undefined, now: Date): CalendarEven
   return ev.status;
 }
 
-export function CalendarSection({ clientId, onOpenClient }: {
-  clientId?: string;
+export function CalendarSection({ onOpenClient }: {
   onOpenClient: (id: string, name?: string) => void;
 }) {
   const [view, setView] = useState<'today' | 'month' | 'year'>('today');
@@ -80,43 +79,54 @@ export function CalendarSection({ clientId, onOpenClient }: {
   const loadSeq = useRef(0);
   const loadEvents = useCallback(() => {
     const token = ++loadSeq.current;
-    return api.calendar.list(clientId).then((es) => { if (token === loadSeq.current) setEvents(es); }).catch(() => {});
-  }, [clientId]);
+    return api.calendar.list().then((es) => { if (token === loadSeq.current) setEvents(es); }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     let alive = true;
-    Promise.all([api.profiles.list(), api.calendar.list(clientId)])
+    Promise.all([api.profiles.list(), api.calendar.list()])
       .then(([cs, es]) => { if (!alive) return; setClients(cs); setEvents(es); })
       .catch(() => {})
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [clientId]);
+  }, []);
 
-  // Auto-scan the active client's timeline ONCE per session — no manual trigger.
-  // Runs as a background task so it survives navigation; the guard reflects an
-  // existing run so remounting the section doesn't re-fire it.
+  // The calendar is ONE central unit across the whole book. On open it scans every
+  // client's timeline not yet read this session (one background task), so detected
+  // commitments populate automatically — no per-client trigger.
+  const scanFired = useRef(false);
   useEffect(() => {
-    if (!clientId || scannedClients.has(clientId) || !clients.length) return;
-    if (bg.latestFor(clientId, 'calendar')) { scannedClients.add(clientId); return; }
-    scannedClients.add(clientId);
-    const c = clients.find((x) => x.id === clientId);
-    bg.run<CalendarScanResult>({
+    if (scanFired.current || !clients.length) return;
+    scanFired.current = true;
+    const toScan = clients.filter((c) => c.stage !== 'lost' && !scannedClients.has(c.id));
+    if (!toScan.length) return;
+    bg.run<{ scanned: number }>({
       kind: 'calendar',
-      label: `Calendar — ${c?.name ?? 'client'}`,
-      clientId,
-      clientName: c?.name,
-      fn: () => api.calendar.scan(clientId),
+      label: `Calendar — reading ${toScan.length} client${toScan.length === 1 ? '' : 's'}`,
+      fn: async () => {
+        // Bounded concurrency; a client is marked scanned only on SUCCESS, so a
+        // transient failure is retried on a later open (never permanently suppressed).
+        let ok = 0, i = 0;
+        const worker = async () => {
+          while (i < toScan.length) { const c = toScan[i++]; try { await api.calendar.scan(c.id); scannedClients.add(c.id); ok++; } catch { /* retry on a later open */ } }
+        };
+        await Promise.all(Array.from({ length: Math.min(4, toScan.length) }, worker));
+        return { scanned: ok };
+      },
     });
-  }, [clientId, clients, bg]);
+  }, [clients, bg]);
 
-  const scanTask = clientId ? bg.latestFor(clientId, 'calendar') : undefined;
+  // Refetch whenever ANY calendar scan completes — including one started on a PREVIOUS
+  // mount (the section unmounts on navigation, but the scan runs on at the app-root
+  // provider), so returning to the Calendar reliably shows freshly-detected events.
+  const scanTask = bg.tasks.find((t) => t.kind === 'calendar');
   const scanning = scanTask?.status === 'running';
   useEffect(() => { if (scanTask?.status === 'done') loadEvents(); }, [scanTask?.id, scanTask?.status, loadEvents]);
 
   // ── unified item model: stored detected/manual events + live renewal markers ──
   const items = useMemo<CalItem[]>(() => {
     const out: CalItem[] = [];
-    const visible = clientId ? clients.filter((c) => c.id === clientId) : clients;
+    const visible = clients;
 
     for (const ev of events) {
       const eff = effectiveStatus(ev, now);
@@ -152,7 +162,7 @@ export function CalendarSection({ clientId, onOpenClient }: {
       }
     }
     return out;
-  }, [events, clients, clientId, now]);
+  }, [events, clients, now]);
 
   // ── actions on stored events ──
   const patchEvent = useCallback(async (ev: CalendarEvent | undefined, patch: Parameters<typeof api.calendar.update>[1]) => {
@@ -168,8 +178,6 @@ export function CalendarSection({ clientId, onOpenClient }: {
     loadEvents();
   }, [loadEvents]);
 
-  const clientName = clientId ? clients.find((c) => c.id === clientId)?.name : undefined;
-
   return (
     <div className="space-y-4">
       {/* Header + view switch */}
@@ -181,7 +189,7 @@ export function CalendarSection({ clientId, onOpenClient }: {
           <div className="min-w-0">
             <h1 className="text-lg font-semibold leading-tight truncate">Calendar</h1>
             <p className="text-xs text-brand-muted truncate">
-              {clientName ? `${clientName} — commitments & renewal` : 'Commitments & renewals across your book'}
+              Commitments &amp; renewals across your book
               {scanning && <span className="inline-flex items-center gap-1 ml-2 text-brand-greenDark"><Loader2 size={11} className="animate-spin" /> reading timeline…</span>}
             </p>
           </div>
@@ -208,11 +216,11 @@ export function CalendarSection({ clientId, onOpenClient }: {
       ) : view === 'month' ? (
         <MonthView items={items} now={now} onOpenClient={onOpenClient} />
       ) : (
-        <YearlyRenewals clients={clientId ? clients.filter((c) => c.id === clientId) : clients} items={items} now={now} onOpenClient={onOpenClient} />
+        <YearlyRenewals clients={clients} items={items} now={now} onOpenClient={onOpenClient} />
       )}
 
       {adding && (
-        <AddEventModal clients={clients} defaultClientId={clientId} onClose={() => setAdding(false)}
+        <AddEventModal clients={clients} defaultClientId={undefined} onClose={() => setAdding(false)}
           onCreated={() => { setAdding(false); loadEvents(); }} />
       )}
     </div>

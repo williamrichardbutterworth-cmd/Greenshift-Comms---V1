@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Building2, Sparkles, Loader2, FileText, Paperclip, Plus, FilePlus2,
   Phone, CheckCircle2, Circle, RefreshCw, Trash2, ExternalLink,
@@ -34,6 +34,7 @@ export function ClientHub({
   onOpenBills: () => void;
 }) {
   const [client, setClient] = useState<ClientProfile | null>(null);
+  const clientRef = useRef<ClientProfile | null>(null); clientRef.current = client; // freshest client for async writes
   const [files, setFiles] = useState<ClientFile[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
@@ -66,9 +67,48 @@ export function ClientHub({
 
   // Two client-specific talk tracks gathered across all logged sources, newest
   // first, de-duplicated: `angles` = the expertise/deal points; `rapport` = warm,
-  // personal openers tailored to their business.
+  // personal openers (from activity meta AND the persisted inputs.rapport store).
   const angles = useMemo(() => gatherAngles(client?.activities), [client]);
-  const rapport = useMemo(() => gatherRapport(client?.activities), [client]);
+  const rapport = useMemo(() => {
+    const fromInputs = Array.isArray((client?.inputs as Record<string, unknown> | undefined)?.rapport)
+      ? ((client!.inputs as Record<string, unknown>).rapport as unknown[]).filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+      : [];
+    const seen = new Set<string>(); const out: string[] = [];
+    for (const r of [...gatherRapport(client?.activities), ...fromInputs]) {
+      const k = r.trim().toLowerCase();
+      if (r.trim() && !seen.has(k)) { seen.add(k); out.push(r.trim()); }
+    }
+    return out;
+  }, [client]);
+
+  // Rapport openers may not exist for clients created before the feature — generate
+  // them once in the background from the scraped business understanding + conversations,
+  // and persist onto inputs.rapport so they stick.
+  const [rapportLoading, setRapportLoading] = useState(false);
+  const rapportGenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!client || rapport.length || rapportGenRef.current === client.id) return;
+    const cs = String((client.inputs as Record<string, unknown>).companySummary ?? '').trim();
+    const convo = client.activities
+      .filter((a) => ['transcript', 'note', 'email-received', 'email-sent'].includes(a.type))
+      .map((a) => [a.title, a.detail].filter(Boolean).join('\n')).join('\n\n');
+    const source = [cs && `What the business does: ${cs}`, convo].filter(Boolean).join('\n\n').trim();
+    if (!source) return; // nothing to derive openers from yet
+    rapportGenRef.current = client.id;
+    setRapportLoading(true);
+    api.analyzeSource(source, 'transcript', client.inputs)
+      .then(async (a) => {
+        // Merge onto the FRESHEST client (not the captured closure) so a concurrent
+        // record edit / logged call during the analyze window isn't clobbered.
+        const cur = clientRef.current;
+        if (a.rapport?.length && cur) {
+          const updated = await api.profiles.update(cur.id, { inputs: { ...cur.inputs, rapport: a.rapport } }).catch(() => null);
+          if (updated) setClient(updated);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setRapportLoading(false));
+  }, [client, rapport.length]);
 
   if (err && !client) return <div className="max-w-wide mx-auto"><button className="btn-ghost mb-3" onClick={onBack}><ArrowLeft size={15} /> Back</button><p className="text-sm text-up" role="alert">{err}</p></div>;
   if (!client) return <div className="max-w-wide mx-auto"><Loader2 className="animate-spin text-brand-green mt-10 mx-auto" size={22} /></div>;
@@ -227,91 +267,156 @@ export function ClientHub({
           onOpenProject={onOpenProject}
         />
       ) : (
-      <div className="space-y-4">
-        {/* ── Deal cockpit: move this deal forward ── */}
-        <div className="grid lg:grid-cols-[1.5fr_1fr] gap-4 items-start">
-          {/* Left: next step + talk track call-points */}
-          <div className="space-y-4 min-w-0">
-            <section className="card p-4 bg-gradient-to-br from-brand-tint to-white">
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/15 text-brand-greenDark"><Sparkles size={13} /></span>
-                <h3 className="text-sm font-semibold">Recommended next step</h3>
-                <button className="ml-auto text-brand-muted hover:text-brand-ink" onClick={() => recommend(client)} title="Refresh recommendation" disabled={nextLoading}>
-                  <RefreshCw size={13} className={nextLoading ? 'animate-spin' : ''} />
-                </button>
-              </div>
-              {nextLoading ? <p className="text-sm text-brand-muted">Thinking…</p>
-                : next?.action ? (
-                  <div className="flex flex-wrap items-start gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium">{next.action}</p>
-                      {next.rationale && <p className="text-[13px] text-brand-muted mt-0.5 leading-snug">{next.rationale}</p>}
-                    </div>
-                    <button className="btn-primary !py-1.5 text-sm shrink-0" onClick={() => onStartDocument(client, next.templateId || undefined)}>
-                      <Wand2 size={14} /> {next.templateId ? 'Create this' : 'New report'}
-                    </button>
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_340px] gap-4 items-start">
+        {/* ── MAIN: the client's story — next step → talk track → record → progress ── */}
+        <div className="space-y-4 min-w-0">
+          {/* Recommended next step */}
+          <section className="card p-4 bg-gradient-to-br from-brand-tint to-white">
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/15 text-brand-greenDark"><Sparkles size={13} /></span>
+              <h3 className="text-sm font-semibold">Recommended next step</h3>
+              <button className="ml-auto text-brand-muted hover:text-brand-ink" onClick={() => recommend(client)} title="Refresh recommendation" disabled={nextLoading}>
+                <RefreshCw size={13} className={nextLoading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+            {nextLoading ? <p className="text-sm text-brand-muted">Thinking…</p>
+              : next?.action ? (
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{next.action}</p>
+                    {next.rationale && <p className="text-[13px] text-brand-muted mt-0.5 leading-snug">{next.rationale}</p>}
                   </div>
+                  <button className="btn-primary !py-1.5 text-sm shrink-0" onClick={() => onStartDocument(client, next.templateId || undefined)}>
+                    <Wand2 size={14} /> {next.templateId ? 'Create this' : 'New report'}
+                  </button>
+                </div>
+              ) : (
+                <p className="text-sm text-brand-muted">
+                  {next?.provider === 'none' ? 'Recommendations need automatic drafting configured.'
+                    : next?.provider === 'error' ? 'Couldn’t fetch a recommendation — try Refresh.'
+                    : 'No recommendation yet — log a call in the panel on the right.'}
+                </p>
+              )}
+          </section>
+
+          {/* Talk track — expertise + rapport, side by side */}
+          <section className="card p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/10 text-brand-greenDark"><Lightbulb size={13} /></span>
+              <h3 className="text-sm font-semibold">Talk track</h3>
+              <span className="text-[11px] text-brand-muted hidden sm:inline">— how to lead the next call</span>
+              {angles.length > 0 && (
+                <button className="btn-ghost !py-1 !px-2 text-xs ml-auto shrink-0" onClick={() => onDraftFromAngles(client, angles)} title="Draft a follow-up email built on these angles">
+                  <Sparkles size={13} /> Draft follow-up
+                </button>
+              )}
+            </div>
+            <div className="grid md:grid-cols-2 gap-x-5 gap-y-3">
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide text-brand-muted mb-1.5 flex items-center gap-1.5"><Lightbulb size={12} className="text-brand-greenDark" /> Expertise — points to land</div>
+                {angles.length > 0 ? (
+                  <ul className="space-y-1.5">
+                    {angles.map((ang) => (
+                      <li key={ang} className="group flex items-start gap-2 rounded-lg px-2.5 py-2 bg-brand-tint/60 hover:bg-brand-tint transition">
+                        <span className="text-brand-green mt-0.5 shrink-0">›</span>
+                        <span className="text-[13px] leading-snug flex-1">{ang}</span>
+                        <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-greenDark shrink-0 transition" onClick={() => copyAngle(ang)} title="Copy">
+                          {copied === ang ? <Check size={13} className="text-brand-green" /> : <Copy size={13} />}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 ) : (
-                  <p className="text-sm text-brand-muted">
-                    {next?.provider === 'none' ? 'Recommendations need automatic drafting configured.'
-                      : next?.provider === 'error' ? 'Couldn’t fetch a recommendation — try Refresh.'
-                      : 'No recommendation yet — log a call below.'}
-                  </p>
+                  <p className="text-[13px] text-brand-muted">No call points yet — log a call and we’ll gather talking points.</p>
                 )}
+              </div>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-wide text-brand-muted mb-1.5 flex items-center gap-1.5"><HeartHandshake size={12} className="text-brand-greenDark" /> Rapport — questions that set us apart</div>
+                {rapport.length > 0 ? (
+                  <ul className="space-y-1.5">
+                    {rapport.map((q) => (
+                      <li key={q} className="group flex items-start gap-2 rounded-lg px-2.5 py-2 bg-brand-surface border border-brand-line/70 hover:bg-brand-tint/50 transition">
+                        <HeartHandshake size={13} className="text-brand-greenDark mt-0.5 shrink-0" />
+                        <span className="text-[13px] leading-snug flex-1">{q}</span>
+                        <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-greenDark shrink-0 transition" onClick={() => copyAngle(q)} title="Copy">
+                          {copied === q ? <Check size={13} className="text-brand-green" /> : <Copy size={13} />}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : rapportLoading ? (
+                  <p className="text-[13px] text-brand-muted flex items-center gap-1.5"><Loader2 size={13} className="animate-spin" /> Finding rapport openers from their website &amp; calls…</p>
+                ) : (
+                  <p className="text-[13px] text-brand-muted">Warm, personal openers tailored to their business will appear here as we learn about them.</p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {/* Client record */}
+          <ClientProfilePanel inputs={inputs} onSave={(nextInputs) => patch({ inputs: nextInputs })} />
+
+          {/* Tracker + Documents */}
+          <div className="grid sm:grid-cols-2 gap-4 items-start">
+            <section className="card p-4">
+              <h3 className="text-sm font-semibold mb-3">Tracker</h3>
+              <div className="space-y-1">
+                {MILESTONES.map((m) => {
+                  const done = !!client.tracker[m.key];
+                  return (
+                    <button key={m.key} onClick={() => toggleMilestone(m.key)} className="flex items-center gap-2.5 w-full text-left text-sm group rounded-md px-1.5 py-1 hover:bg-brand-tint/60 transition">
+                      {done ? <CheckCircle2 size={17} className="text-brand-green shrink-0" /> : <Circle size={17} className="text-brand-line group-hover:text-brand-muted shrink-0" />}
+                      <span className={done ? 'text-brand-ink' : 'text-brand-muted'}>{m.label}</span>
+                      {done && client.tracker[m.key] && <span className="text-[10px] text-brand-muted ml-auto">{new Date(client.tracker[m.key] as string).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>}
+                    </button>
+                  );
+                })}
+              </div>
             </section>
 
             <section className="card p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/10 text-brand-greenDark"><Lightbulb size={13} /></span>
-                <h3 className="text-sm font-semibold">Talk track</h3>
-                <span className="text-[11px] text-brand-muted hidden sm:inline">— how to lead the next call</span>
-                {angles.length > 0 && (
-                  <button className="btn-ghost !py-1 !px-2 text-xs ml-auto shrink-0" onClick={() => onDraftFromAngles(client, angles)} title="Draft a follow-up email built on these angles">
-                    <Sparkles size={13} /> Draft follow-up
-                  </button>
-                )}
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold">Documents &amp; media</h3>
+                <button className="text-xs text-brand-greenDark hover:underline inline-flex items-center gap-1" onClick={() => onStartDocument(client)}><Plus size={12} /> New</button>
               </div>
-
-              {/* Expertise track — the structured, deal-advancing points */}
-              <div className="text-[11px] uppercase tracking-wide text-brand-muted mb-1.5 flex items-center gap-1.5"><Lightbulb size={12} className="text-brand-greenDark" /> Expertise — points to land</div>
-              {angles.length > 0 ? (
-                <ul className="space-y-1.5">
-                  {angles.map((ang) => (
-                    <li key={ang} className="group flex items-start gap-2 rounded-lg px-2.5 py-2 bg-brand-tint/60 hover:bg-brand-tint transition">
-                      <span className="text-brand-green mt-0.5 shrink-0">›</span>
-                      <span className="text-[13px] leading-snug flex-1">{ang}</span>
-                      <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-greenDark shrink-0 transition" onClick={() => copyAngle(ang)} title="Copy">
-                        {copied === ang ? <Check size={13} className="text-brand-green" /> : <Copy size={13} />}
+              {docActivities.length > 0 && (
+                <div className="mb-3">
+                  <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">Generated reports</div>
+                  <div className="space-y-1">
+                    {docActivities.map((a) => (
+                      <button key={a.id} className="flex items-center gap-2 w-full text-left text-sm hover:bg-brand-tint rounded-md px-1.5 py-1 transition" onClick={() => onOpenProject(String(a.meta!.projectId))}>
+                        <span className="grid place-items-center h-6 w-6 rounded bg-brand-tint text-brand-greenDark shrink-0"><FileText size={12} /></span>
+                        <span className="flex-1 truncate">{a.title.replace(/^Created /, '')}</span>
+                        <ExternalLink size={12} className="text-brand-muted shrink-0" />
                       </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-[13px] text-brand-muted">No call points yet — log a call or paste a transcript and we’ll gather talking points.</p>
+                    ))}
+                  </div>
+                </div>
               )}
-
-              {/* Rapport track — warm, personal openers tailored to their business */}
-              <div className="text-[11px] uppercase tracking-wide text-brand-muted mt-4 mb-1.5 flex items-center gap-1.5"><HeartHandshake size={12} className="text-brand-greenDark" /> Rapport — questions that set us apart</div>
-              {rapport.length > 0 ? (
-                <ul className="space-y-1.5">
-                  {rapport.map((q) => (
-                    <li key={q} className="group flex items-start gap-2 rounded-lg px-2.5 py-2 bg-brand-surface border border-brand-line/70 hover:bg-brand-tint/50 transition">
-                      <HeartHandshake size={13} className="text-brand-greenDark mt-0.5 shrink-0" />
-                      <span className="text-[13px] leading-snug flex-1">{q}</span>
-                      <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-brand-greenDark shrink-0 transition" onClick={() => copyAngle(q)} title="Copy">
-                        {copied === q ? <Check size={13} className="text-brand-green" /> : <Copy size={13} />}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-[13px] text-brand-muted">Warm, personal openers tailored to their business will appear here as we learn about them — drawn from their website and your calls.</p>
-              )}
+              <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">Client files</div>
+              <div className="space-y-1 mb-2">
+                {files.map((f) => (
+                  <div key={f.id} className="group flex items-center gap-2 text-sm rounded-md px-1.5 py-1 hover:bg-brand-tint/60 transition">
+                    <span className="grid place-items-center h-6 w-6 rounded bg-brand-line/50 text-brand-muted shrink-0"><Paperclip size={12} /></span>
+                    <a href={api.files.downloadUrl(f.id)} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-brand-green" title={f.name}>{f.name}</a>
+                    {f.extractedText && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0" title="Text read for context & reports">read</span>}
+                    <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0 transition" onClick={() => removeFile(f.id)} title="Remove"><Trash2 size={12} /></button>
+                  </div>
+                ))}
+                {!files.length && <p className="text-xs text-brand-muted">No files yet.</p>}
+              </div>
+              <label className="btn-ghost w-full cursor-pointer justify-center !py-1.5 text-sm">
+                {uploading ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />} Upload a document
+                <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAndAnalyze(f); e.target.value = ''; }} />
+              </label>
             </section>
           </div>
+        </div>
 
-          {/* Right: live-call log / capture */}
-          <section className="card p-4 lg:sticky lg:top-[calc(var(--topbar-h)+16px)]">
+        {/* ── RIGHT RAIL: capture + the pipeline steps (sticky) ── */}
+        <div className="space-y-4 lg:sticky lg:top-[calc(var(--topbar-h)+16px)]">
+          {/* Log this call */}
+          <section className="card p-4">
             <div className="flex items-center gap-2 mb-1">
               <span className="grid place-items-center h-6 w-6 rounded-lg bg-brand-green/15 text-brand-greenDark"><Phone size={13} /></span>
               <h3 className="text-sm font-semibold">Log this call</h3>
@@ -322,7 +427,7 @@ export function ClientHub({
                 <button key={k} onClick={() => setIntakeKind(k)} aria-pressed={intakeKind === k} className={'text-xs px-2.5 py-1 rounded-lg border capitalize transition ' + (intakeKind === k ? 'border-brand-green bg-brand-tint text-brand-ink font-medium' : 'border-brand-line text-brand-muted hover:text-brand-ink')}>{k}</button>
               ))}
             </div>
-            <textarea className="input min-h-[150px] text-sm" placeholder="Paste the transcript / email / bill text here, or type live notes during the call…" value={intakeText} onChange={(e) => setIntakeText(e.target.value)} />
+            <textarea className="input min-h-[140px] text-sm" placeholder="Paste the transcript / email / bill text here, or type live notes during the call…" value={intakeText} onChange={(e) => setIntakeText(e.target.value)} />
             <div className="flex items-center gap-2 mt-2">
               <button className="btn-primary !py-1.5 text-sm flex-1 justify-center" onClick={analyzePasted} disabled={analyzing || !intakeText.trim()}>
                 {analyzing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} {analyzing ? 'Reading…' : 'Read & log'}
@@ -339,12 +444,8 @@ export function ClientHub({
               ))}
             </div>
           </section>
-        </div>
 
-        {/* ── Client record + Letter of Authority ── */}
-        <div className="grid lg:grid-cols-[1fr_300px] gap-4 items-start">
-          <ClientProfilePanel inputs={inputs} onSave={(nextInputs) => patch({ inputs: nextInputs })} />
-
+          {/* Key steps */}
           {(() => {
             const loa = loaCompleteness(deriveLoaFromClient(inputs));
             const rfq = rfqCompleteness(inputs);
@@ -389,65 +490,6 @@ export function ClientHub({
               </section>
             );
           })()}
-        </div>
-
-        {/* ── Tracker + Documents & media (bottom) ── */}
-        <div className="grid lg:grid-cols-2 gap-4 items-start">
-          <section className="card p-4">
-            <h3 className="text-sm font-semibold mb-3">Tracker</h3>
-            <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1">
-              {MILESTONES.map((m) => {
-                const done = !!client.tracker[m.key];
-                return (
-                  <button key={m.key} onClick={() => toggleMilestone(m.key)} className="flex items-center gap-2.5 w-full text-left text-sm group rounded-md px-1.5 py-1 hover:bg-brand-tint/60 transition">
-                    {done ? <CheckCircle2 size={17} className="text-brand-green shrink-0" /> : <Circle size={17} className="text-brand-line group-hover:text-brand-muted shrink-0" />}
-                    <span className={done ? 'text-brand-ink' : 'text-brand-muted'}>{m.label}</span>
-                    {done && client.tracker[m.key] && <span className="text-[10px] text-brand-muted ml-auto">{new Date(client.tracker[m.key] as string).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="card p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold">Documents &amp; media</h3>
-              <button className="text-xs text-brand-greenDark hover:underline inline-flex items-center gap-1" onClick={() => onStartDocument(client)}><Plus size={12} /> New</button>
-            </div>
-
-            {docActivities.length > 0 && (
-              <div className="mb-3">
-                <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">Generated reports</div>
-                <div className="space-y-1">
-                  {docActivities.map((a) => (
-                    <button key={a.id} className="flex items-center gap-2 w-full text-left text-sm hover:bg-brand-tint rounded-md px-1.5 py-1 transition" onClick={() => onOpenProject(String(a.meta!.projectId))}>
-                      <span className="grid place-items-center h-6 w-6 rounded bg-brand-tint text-brand-greenDark shrink-0"><FileText size={12} /></span>
-                      <span className="flex-1 truncate">{a.title.replace(/^Created /, '')}</span>
-                      <ExternalLink size={12} className="text-brand-muted shrink-0" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="text-[10px] uppercase tracking-wide text-brand-muted mb-1.5">Client files</div>
-            <div className="space-y-1 mb-2">
-              {files.map((f) => (
-                <div key={f.id} className="group flex items-center gap-2 text-sm rounded-md px-1.5 py-1 hover:bg-brand-tint/60 transition">
-                  <span className="grid place-items-center h-6 w-6 rounded bg-brand-line/50 text-brand-muted shrink-0"><Paperclip size={12} /></span>
-                  <a href={api.files.downloadUrl(f.id)} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-brand-green" title={f.name}>{f.name}</a>
-                  {f.extractedText && <span className="text-[9px] text-brand-greenDark bg-brand-tint px-1 rounded shrink-0" title="Text read for context & reports">read</span>}
-                  <button className="opacity-0 group-hover:opacity-100 text-brand-muted hover:text-up shrink-0 transition" onClick={() => removeFile(f.id)} title="Remove"><Trash2 size={12} /></button>
-                </div>
-              ))}
-              {!files.length && <p className="text-xs text-brand-muted">No files yet.</p>}
-            </div>
-
-            <label className="btn-ghost w-full cursor-pointer justify-center !py-1.5 text-sm">
-              {uploading ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />} Upload a document
-              <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAndAnalyze(f); e.target.value = ''; }} />
-            </label>
-          </section>
         </div>
       </div>
       )}
