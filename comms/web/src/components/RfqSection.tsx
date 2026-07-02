@@ -141,16 +141,21 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
   const update = useCallback((next: ReportInputs) => { dirty.current = true; hydrated.current = true; setInputs(next); }, []);
   const setField = useCallback((key: string, value: string, source: RfqSource = 'manual') => { markTouched(key); update(setRfqField(inputsRef.current, key, value, source)); }, [update, markTouched]);
 
+  // Files that plausibly ARE bills/documents. Capture-minted transcript/email
+  // text files (the paste-log's durable verbatim copy) must not flip
+  // "bills available" to Yes — only genuine uploads/pasted bill text count.
+  const billish = (fs: ClientFile[]) => fs.filter((f) => !(f.mime === 'text/plain' && /^(call transcript|email) - /i.test(f.name)));
+
   // Displayed value: billsAvailable defaults to "Yes" when bills are on file (read-time only —
   // no write to the record on open). Everything else resolves from the bound record/inputs.rfq.
   const fieldVal = (key: string): string => {
     const v = rfqFieldView(inputs, key).value;
-    return (!v && key === 'billsAvailable' && files.length > 0) ? 'Yes' : v;
+    return (!v && key === 'billsAvailable' && billish(files).length > 0) ? 'Yes' : v;
   };
   const isFilled = (key: string) => !!fieldVal(key).trim();
   const exportValues = (): Record<string, string> => Object.fromEntries(RFQ_FIELDS.map((f) => {
     const v = rfqFieldView(inputsRef.current, f.key).value;
-    return [f.key, (!v && f.key === 'billsAvailable' && files.length > 0) ? 'Yes' : v];
+    return [f.key, (!v && f.key === 'billsAvailable' && billish(files).length > 0) ? 'Yes' : v];
   }));
 
   const comp = useMemo(() => { const known = RFQ_FIELDS.filter((f) => isFilled(f.key)).length; return { known, total: RFQ_FIELDS.length }; }, [inputs, files.length]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -195,7 +200,7 @@ function RfqBuilder({ client, onBack }: { client: ClientProfile; onBack: () => v
       const missing = RFQ_FIELDS.filter((f) => {
         const view = rfqFieldView(merged, f.key);
         if (view.derived) return false;
-        const v = view.value || (f.key === 'billsAvailable' && filesRef.current.length ? 'Yes' : '');
+        const v = view.value || (f.key === 'billsAvailable' && billish(filesRef.current).length ? 'Yes' : '');
         return !v.trim();
       });
       let finalGameplan: Record<string, { cue: string; ask: string }> | null = null;

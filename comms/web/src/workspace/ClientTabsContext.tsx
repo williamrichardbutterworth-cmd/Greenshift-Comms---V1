@@ -17,6 +17,8 @@ interface ClientTabsValue {
   active: ActiveTab;
   activeClientId: string | null; // null when the Free tab is active
   openClient: (id: string, name?: string) => void; // add (if new) + activate
+  /** Refresh a tab's label WITHOUT activating it (e.g. after a background intake renames the client). */
+  renameClient: (id: string, name: string) => void;
   closeClient: (id: string) => void;
   goFree: () => void;
   setActiveClient: (id: string) => void;
@@ -74,6 +76,11 @@ export function ClientTabsProvider({ children }: { children: ReactNode }) {
     setActive({ kind: 'client', id });
   }, [setOpenClients, setActive]);
 
+  const renameClient = useCallback((id: string, name: string) => {
+    if (!name.trim()) return;
+    setOpenClients((prev) => (Array.isArray(prev) ? prev : []).map((c) => (c.id === id && c.name !== name ? { id, name } : c)));
+  }, [setOpenClients]);
+
   const setActiveClient = useCallback((id: string) => setActive({ kind: 'client', id }), [setActive]);
   const goFree = useCallback(() => setActive({ kind: 'free' }), [setActive]);
 
@@ -91,7 +98,7 @@ export function ClientTabsProvider({ children }: { children: ReactNode }) {
     });
   }, [setOpenClients, setActive, openClients]);
 
-  const value: ClientTabsValue = { openClients, active, activeClientId, openClient, closeClient, goFree, setActiveClient };
+  const value: ClientTabsValue = { openClients, active, activeClientId, openClient, renameClient, closeClient, goFree, setActiveClient };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -119,15 +119,21 @@ async function metaPersist(rows: ClientFile[]): Promise<void> {
 }
 
 // ── byte storage (Storage bucket or local dir) ──
+// The storage KEY is always sanitised to ASCII-safe characters — Supabase Storage
+// rejects keys outside its allowed set (em dashes, curly quotes, £, accents all
+// 400), which would silently strand the upload. The pretty original name lives
+// only in the metadata row.
+const safeKeyName = (name: string): string => name.replace(/[^a-z0-9.\-_]+/gi, '_');
+
 async function storeBytes(id: string, name: string, buffer: Buffer, mime: string, sb: SupabaseClient | null): Promise<string> {
   if (sb) {
-    const path = `${id}/${name}`;
+    const path = `${id}/${safeKeyName(name)}`;
     const { error } = await sb.storage.from(BUCKET).upload(path, buffer, { contentType: mime || 'application/octet-stream', upsert: true });
     if (error) throw new Error(error.message);
     return path;
   }
   await mkdir(UPLOAD_DIR, { recursive: true });
-  const safe = `${id}-${name.replace(/[^a-z0-9.\-_]+/gi, '_')}`;
+  const safe = `${id}-${safeKeyName(name)}`;
   await writeFile(join(UPLOAD_DIR, safe), buffer);
   return safe;
 }
@@ -191,7 +197,7 @@ export async function listFiles(filter: { projectId?: string; clientProfileId?: 
   return rows;
 }
 
-async function getFileMeta(id: string): Promise<ClientFile | null> {
+export async function getFileMeta(id: string): Promise<ClientFile | null> {
   const sb = getSupabase();
   if (sb) {
     const { data, error } = await sb.from('client_files').select('*').eq('id', id).maybeSingle();

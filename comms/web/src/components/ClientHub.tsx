@@ -6,17 +6,23 @@ import {
 } from 'lucide-react';
 import {
   api, type ClientProfile, type ClientStage, type ClientFile, type ActivityType,
-  type SourceKind, type NextStep, type ReportInputs,
+  type SourceKind, type NextStep, type ReportInputs, type LogCallResult, type IntakeRunResult,
 } from '../lib/api';
 import { STAGES, MILESTONES, QUICK_LOG, milestoneLabel, stageIndex, gatherAngles, gatherRapport } from '../lib/crm';
 import { deriveLoaFromClient, loaCompleteness, type CustomerVariables } from '../lib/loa';
 import { rfqCompleteness } from '../lib/rfq';
+import { useBackgroundTasks } from '../workspace/BackgroundTasksContext';
+import { useClientTabs } from '../workspace/ClientTabsContext';
 import { ClientJourney } from './ClientJourney';
 import { ClientProfilePanel } from './ClientProfilePanel';
 
 const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader(); r.onload = () => res((r.result as string).split(',')[1] ?? ''); r.onerror = rej; r.readAsDataURL(file);
 });
+
+// Capture tasks already reconciled into the hub (module-level so a remount — e.g.
+// navigating away during a background read and back — doesn't re-apply or re-toast).
+const handledCaptureTasks = new Set<string>();
 
 // The CRM client hub — everything about one client in one place. The Overview is a
 // deal cockpit: the next step, the talk-track call points and a live-call log up top;
@@ -44,9 +50,10 @@ export function ClientHub({
 
   const [intakeText, setIntakeText] = useState('');
   const [intakeKind, setIntakeKind] = useState<SourceKind>('transcript');
-  const [analyzing, setAnalyzing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const bg = useBackgroundTasks();
+  const tabs = useClientTabs();
 
   const loadFiles = useCallback(() => api.files.list({ clientProfileId: clientId }).then(setFiles).catch(() => {}), [clientId]);
 
@@ -88,6 +95,10 @@ export function ClientHub({
   const rapportGenRef = useRef<string | null>(null);
   useEffect(() => {
     if (!client || rapport.length || rapportGenRef.current === client.id) return;
+    // Never race a capture: a log-call/intake is about to merge inputs server-side,
+    // and it usually delivers rapport itself. Don't mark the ref — the effect
+    // re-fires (and re-checks) when the capture's refresh lands.
+    if (bg.tasks.some((t) => (t.kind === 'log-call' || t.kind === 'client-intake') && t.clientId === client.id && t.status === 'running')) return;
     const cs = String((client.inputs as Record<string, unknown>).companySummary ?? '').trim();
     const convo = client.activities
       .filter((a) => ['transcript', 'note', 'email-received', 'email-sent'].includes(a.type))
@@ -98,17 +109,53 @@ export function ClientHub({
     setRapportLoading(true);
     api.analyzeSource(source, 'transcript', client.inputs)
       .then(async (a) => {
-        // Merge onto the FRESHEST client (not the captured closure) so a concurrent
-        // record edit / logged call during the analyze window isn't clobbered.
-        const cur = clientRef.current;
-        if (a.rapport?.length && cur) {
-          const updated = await api.profiles.update(cur.id, { inputs: { ...cur.inputs, rapport: a.rapport } }).catch(() => null);
-          if (updated) setClient(updated);
-        }
+        if (!a.rapport?.length) return;
+        // Merge onto SERVER-fresh inputs (a background capture may have merged
+        // fields since this component's snapshot) — never write a stale blob back.
+        const cur = await api.profiles.get(client.id).catch(() => clientRef.current);
+        if (!cur) return;
+        const existing = (cur.inputs as Record<string, unknown>).rapport;
+        if (Array.isArray(existing) && existing.length) { setClient(cur); return; } // someone got there first
+        const updated = await api.profiles.update(cur.id, { inputs: { ...cur.inputs, rapport: a.rapport } }).catch(() => null);
+        if (updated) setClient(updated);
       })
       .catch(() => {})
       .finally(() => setRapportLoading(false));
-  }, [client, rapport.length]);
+  }, [client, rapport.length, bg.tasks]);
+
+  // Capture tasks (paste-log, upload-read, the initial intake) for this client.
+  // A running one drives the status line/banner; every settled one is reconciled
+  // exactly once (module-level guard, so remounts don't re-apply): one record
+  // refresh covers them all, each degraded extraction surfaces its caveat, and a
+  // failed paste goes back into the box — appended, so it can never overwrite
+  // words typed since.
+  const captureRunning = bg.tasks.find((t) => (t.kind === 'log-call' || t.kind === 'client-intake') && t.clientId === clientId && t.status === 'running');
+  useEffect(() => {
+    const settled = bg.tasks.filter((t) =>
+      (t.kind === 'log-call' || t.kind === 'client-intake') && t.clientId === clientId && t.status !== 'running' && !handledCaptureTasks.has(t.id));
+    if (!settled.length) return;
+    for (const t of settled) handledCaptureTasks.add(t.id);
+    if (settled.some((t) => t.status === 'done')) {
+      api.profiles.get(clientId).then((c) => { setClient(c); recommend(c); tabs.renameClient(clientId, c.name); }).catch(() => {});
+      loadFiles();
+    }
+    for (const t of settled) {
+      if (t.status === 'done') {
+        const r = t.result as Partial<LogCallResult & IntakeRunResult> | undefined;
+        const a = r?.analysis ?? r?.intake;
+        if (a?.error && a.provider !== 'claude' && a.provider !== 'openai') {
+          setErr(`Saved${r?.transcriptFileId ? ' (the text is on the client’s files)' : ''}, but automatic reading was unavailable: ${a.error}`);
+        }
+      } else if (typeof t.payload?.text === 'string') {
+        // Transport failure before the server saw it — the words go back in the box.
+        const text = t.payload.text as string;
+        setIntakeText((cur) => (cur.trim() ? `${cur}\n\n${text}` : text));
+        setErr(`Couldn’t ${t.kind === 'client-intake' ? 'finish the setup' : 'log the call'}${t.error ? `: ${t.error}` : ''}. Your text is back in the box.`);
+      } else {
+        setErr(t.error ?? 'A background read failed.');
+      }
+    }
+  }, [bg.tasks, clientId, recommend, loadFiles, tabs]);
 
   if (err && !client) return <div className="max-w-wide mx-auto"><button className="btn-ghost mb-3" onClick={onBack}><ArrowLeft size={15} /> Back</button><p className="text-sm text-up" role="alert">{err}</p></div>;
   if (!client) return <div className="max-w-wide mx-auto"><Loader2 className="animate-spin text-brand-green mt-10 mx-auto" size={22} /></div>;
@@ -141,32 +188,22 @@ export function ClientHub({
     if (q.milestone && !client.tracker[q.milestone]) await patch({ tracker: { ...client.tracker, [q.milestone]: new Date().toISOString() } });
   };
 
-  // Apply an analysis result: merge new fields, capture angles, log a timeline entry, set milestones.
-  const applyAnalysis = async (a: Awaited<ReturnType<typeof api.analyzeSource>>, sourceKind: SourceKind) => {
-    const mergedInputs: ReportInputs = { ...inputs };
-    for (const [k, v] of Object.entries(a.profile)) if (v && !String(mergedInputs[k as keyof ReportInputs] ?? '').trim()) (mergedInputs as Record<string, string>)[k] = v as string;
-    const tracker = { ...client.tracker };
-    for (const m of a.suggestedMilestones) if (!tracker[m]) tracker[m] = new Date().toISOString();
-    await patch({ inputs: mergedInputs, tracker });
-    const actType: ActivityType = sourceKind === 'email' ? 'email-received' : sourceKind === 'bill' ? 'file' : sourceKind === 'transcript' ? 'transcript' : 'note';
-    const meta = { ...(a.angles?.length ? { angles: a.angles } : {}), ...(a.rapport?.length ? { rapport: a.rapport } : {}) };
-    const updated = await logActivity({
-      type: actType, title: a.summary || 'Update logged',
-      detail: a.points.length ? a.points.map((p) => `• ${p}`).join('\n') : undefined,
-      meta: Object.keys(meta).length ? meta : undefined,
+  // "Log this call" — one background round trip. The server persists the verbatim
+  // text FIRST, then runs ONE unified extraction (profile fields + meters +
+  // milestones + talk tracks + calendar commitments) and merges against fresh
+  // state, so nothing here blocks and no browser snapshot can clobber an edit.
+  const logCall = () => {
+    const text = intakeText; const kind = intakeKind;
+    if (!text.trim()) return;
+    setErr(null);
+    setIntakeText(''); // freed immediately — a transport failure puts it back (watcher above)
+    bg.run<LogCallResult>({
+      kind: 'log-call',
+      label: `Reading the ${kind === 'auto' ? 'update' : kind} — ${client.name}`,
+      clientId, clientName: client.name,
+      payload: { text, kind },
+      fn: () => api.profiles.logCall(clientId, { text, kind }),
     });
-    if (updated) recommend(updated);
-  };
-
-  const analyzePasted = async () => {
-    if (!intakeText.trim()) return;
-    setAnalyzing(true); setErr(null);
-    try {
-      const a = await api.analyzeSource(intakeText, intakeKind, inputs);
-      if (a.error && a.provider !== 'claude' && a.provider !== 'openai') setErr(`Analysis unavailable: ${a.error}`);
-      else { await applyAnalysis(a, intakeKind); setIntakeText(''); }
-    } catch (e) { setErr(String((e as Error).message)); }
-    finally { setAnalyzing(false); }
   };
 
   const uploadAndAnalyze = async (file: File) => {
@@ -177,9 +214,12 @@ export function ClientHub({
       setFiles((f) => [saved, ...f]);
       await logActivity({ type: 'file', title: `Uploaded ${file.name}`, meta: { fileId: saved.id } });
       if (saved.extractedText.trim()) {
-        const a = await api.analyzeSource(saved.extractedText, 'auto', inputs);
-        if (a.error && a.provider !== 'claude' && a.provider !== 'openai') setErr(`File uploaded, but analysis was unavailable: ${a.error}`);
-        else await applyAnalysis(a, (['transcript', 'email', 'bill'] as const).includes(a.kind as 'transcript' | 'email' | 'bill') ? (a.kind as SourceKind) : 'bill');
+        bg.run<LogCallResult>({
+          kind: 'log-call',
+          label: `Reading ${file.name} — ${client.name}`,
+          clientId, clientName: client.name,
+          fn: () => api.profiles.logCall(clientId, { fileId: saved.id, kind: 'auto' }),
+        });
       }
     } catch (e) { setErr(String((e as Error).message)); }
     finally { setUploading(false); }
@@ -255,6 +295,16 @@ export function ClientHub({
           </div>
         </div>
       </section>
+
+      {/* Initial setup runs in the background — show the hub filling in, not a modal. */}
+      {captureRunning?.kind === 'client-intake' && (
+        <section className="card p-3.5 bg-brand-tint/70 border-brand-green/30 flex items-center gap-2.5" role="status">
+          <Loader2 size={15} className="animate-spin text-brand-greenDark shrink-0" />
+          <p className="text-[13px] text-brand-ink">
+            <span className="font-medium">Setting up this client</span> — reading the website, call and documents in the background. Browse anywhere; the record, tracker and calendar fill in on their own.
+          </p>
+        </section>
+      )}
 
       {view === 'journey' ? (
         <ClientJourney
@@ -429,14 +479,22 @@ export function ClientHub({
             </div>
             <textarea className="input min-h-[140px] text-sm" placeholder="Paste the transcript / email / bill text here, or type live notes during the call…" value={intakeText} onChange={(e) => setIntakeText(e.target.value)} />
             <div className="flex items-center gap-2 mt-2">
-              <button className="btn-primary !py-1.5 text-sm flex-1 justify-center" onClick={analyzePasted} disabled={analyzing || !intakeText.trim()}>
-                {analyzing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} {analyzing ? 'Reading…' : 'Read & log'}
+              <button className="btn-primary !py-1.5 text-sm flex-1 justify-center" onClick={logCall} disabled={!intakeText.trim()}>
+                <Sparkles size={14} /> Read &amp; log
               </button>
               <label className="btn-ghost !py-1.5 text-sm cursor-pointer">
                 {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />} Upload
                 <input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAndAnalyze(f); e.target.value = ''; }} />
               </label>
             </div>
+            {captureRunning && (
+              <p className="text-[11px] text-brand-greenDark mt-2 flex items-center gap-1.5">
+                <Loader2 size={12} className="animate-spin shrink-0" />
+                {captureRunning.kind === 'client-intake'
+                  ? 'Setting up this client in the background — the record fills in as it reads.'
+                  : 'Reading in the background — keep working, the record updates itself.'}
+              </p>
+            )}
             <div className="mt-3 pt-3 border-t border-brand-line flex items-center gap-1.5 flex-wrap">
               <span className="label mr-0.5">Quick log</span>
               {QUICK_LOG.map((q) => (

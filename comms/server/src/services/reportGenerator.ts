@@ -2,14 +2,22 @@ import { getAI } from '../providers/ai';
 import { aiConfigured } from '../config';
 import {
   transcriptExtractPrompt, sourceAnalysisPrompt, nextStepPrompt, forwardCurveExtractPrompt,
-  type ReportInputs, type SourceKind, type RecommendClient, type RecommendTemplate,
+  type ReportInputs, type SourceKind, type RecommendClient, type RecommendTemplate, type ClientMeter,
 } from './prompts';
 import { coerceCurves, type CommodityCurve } from './forwardCurveStore';
+import { coerceMeters } from './clientIntake';
 
 export type { ReportInputs } from './prompts';
 
-// Mine a pasted call transcript for report-relevant client details. Never throws.
-const PROFILE_KEYS = ['companyName', 'clientName', 'contact', 'sites', 'currentSupplier', 'contractEnd', 'consumption'];
+// Every client-record field a call/email/bill can legitimately fill — keys the
+// extractors return outside this list are discarded (mirrors CLIENT_FIELD_GROUPS
+// in web/src/lib/clientProfile.ts — keep in sync).
+const PROFILE_KEYS = [
+  'companyName', 'clientName', 'position', 'email', 'telephone', 'contact',
+  'registeredNo', 'businessAddress', 'postcode', 'industry',
+  'currentSupplier', 'currentProduct', 'currentUnitRate', 'currentStanding',
+  'contractEnd', 'consumption', 'sites',
+];
 
 export async function extractTranscript(
   transcript: string,
@@ -37,9 +45,22 @@ export async function extractTranscript(
 // ── CRM: analyse a pasted/uploaded source for client intake. Never throws. ──
 const MILESTONE_KEYS = ['billReceived', 'loaSent', 'loaReturned', 'quotesGathered', 'proposalSent', 'signed'];
 
+/** A raw, ungrounded commitment as the model emitted it — calendarScan.groundEvents
+ *  applies the provenance/date gates before anything reaches the calendar store. */
+export interface RawCommitment {
+  kind?: string; title?: string; dueISO?: string; dueText?: string;
+  allDay?: boolean; source?: string; nature?: string; confidence?: string;
+}
+const coerceCommitments = (raw: unknown): RawCommitment[] =>
+  Array.isArray(raw) ? raw.filter((e): e is RawCommitment => !!e && typeof e === 'object').slice(0, 12) : [];
+
 export interface SourceAnalysis {
   kind: string;
   profile: Record<string, string>;
+  /** Supply points mentioned in the source (merged by MPAN/MPRN downstream). */
+  meters: ClientMeter[];
+  /** Raw commitment candidates (only when requested) — must be grounded before use. */
+  events: RawCommitment[];
   summary: string;
   points: string[];
   /** Client-specific conversational angles/hooks for the next call. */
@@ -51,14 +72,21 @@ export interface SourceAnalysis {
   error?: string;
 }
 
-export async function analyzeSource(text: string, kind: SourceKind, currentInputs?: ReportInputs): Promise<SourceAnalysis> {
-  const empty: SourceAnalysis = { kind, profile: {}, summary: '', points: [], angles: [], rapport: [], suggestedMilestones: [], provider: 'none' };
+export async function analyzeSource(
+  text: string, kind: SourceKind, currentInputs?: ReportInputs,
+  opts?: { loggedAt?: string; withEvents?: boolean },
+): Promise<SourceAnalysis> {
+  const empty: SourceAnalysis = { kind, profile: {}, meters: [], events: [], summary: '', points: [], angles: [], rapport: [], suggestedMilestones: [], provider: 'none' };
   if (!text.trim()) return empty;
   if (!aiConfigured()) return { ...empty, error: 'Automatic analysis isn’t configured.' };
   try {
     const ai = getAI();
-    const { system, prompt } = sourceAnalysisPrompt(text, kind, currentInputs);
-    const res = await ai.generateJSON<{ kind?: string; profile?: Record<string, unknown>; summary?: unknown; points?: unknown; angles?: unknown; rapport?: unknown; suggestedMilestones?: unknown }>({ system, prompt, maxTokens: 1500 });
+    const { system, prompt } = sourceAnalysisPrompt(text, kind, currentInputs, opts);
+    const res = await ai.generateJSON<{ kind?: string; profile?: Record<string, unknown>; meters?: unknown; events?: unknown; summary?: unknown; points?: unknown; angles?: unknown; rapport?: unknown; suggestedMilestones?: unknown }>(
+      // Headroom matters: a truncated JSON loses the WHOLE extraction, so budget
+      // for the worst realistic case (full profile + 12 meters + 10 quoted events).
+      { system, prompt, maxTokens: opts?.withEvents ? 4000 : 1800 },
+    );
     const profile: Record<string, string> = {};
     for (const k of PROFILE_KEYS) {
       const v = res.profile?.[k];
@@ -71,6 +99,8 @@ export async function analyzeSource(text: string, kind: SourceKind, currentInput
     return {
       kind: typeof res.kind === 'string' ? res.kind : (kind === 'auto' ? 'note' : kind),
       profile,
+      meters: coerceMeters(res.meters),
+      events: opts?.withEvents ? coerceCommitments(res.events) : [],
       summary: typeof res.summary === 'string' ? res.summary.slice(0, 400) : '',
       points: strList(res.points, 8), angles: strList(res.angles, 5), rapport: strList(res.rapport, 4), suggestedMilestones, provider: ai.name,
     };

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, Globe, FileText, Paperclip, Loader2, Sparkles, ArrowLeft, ArrowRight, Check, Trash2, Building2 } from 'lucide-react';
-import { api, type ClientProfile, type ReportInputs } from '../lib/api';
-import { mergeIntakeIntoInputs } from '../lib/clientProfile';
+import { api, type ClientProfile, type IntakeRunResult } from '../lib/api';
+import { useBackgroundTasks } from '../workspace/BackgroundTasksContext';
 
 const fileToBase64 = (file: File) => new Promise<string>((res, rej) => {
   const r = new FileReader(); r.onload = () => res((r.result as string).split(',')[1] ?? ''); r.onerror = rej; r.readAsDataURL(file);
@@ -16,86 +16,70 @@ const STEPS = [
   { key: 'media', n: 3, label: 'Media', icon: Paperclip, hint: 'Add bills or docs — we read meters, rates & dates.' },
 ] as const;
 
-const ANALYSE_STAGES = ['Reading the website…', 'Analysing the call…', 'Reading your documents…', 'Building the client profile…'];
-
-// A clean three-step new-client flow: paste a website, a transcript, and attach
-// media — then everything is analysed at once into a comprehensive client profile
-// and journey, ready to generate documents from.
+// A clean three-step new-client flow: paste a website, a transcript, attach media —
+// then everything is queued as ONE background setup. The modal closes immediately
+// and the client's hub opens with the record filling itself in: uploads run first,
+// then the server does the scrape + unified extraction + merge + timeline +
+// calendar commitments in a single request (intake-run).
 export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientProfile) => void; onCancel: () => void }) {
   const [step, setStep] = useState(0);
   const [website, setWebsite] = useState('');
   const [transcript, setTranscript] = useState('');
   const [files, setFiles] = useState<File[]>([]);
-  const [analysing, setAnalysing] = useState(false);
-  const [stage, setStage] = useState(0);
+  const [creating, setCreating] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const bg = useBackgroundTasks();
 
   const canAnalyse = !!(website.trim() || transcript.trim() || files.length);
 
   const analyse = async () => {
     if (!canAnalyse) { setErr('Add a website, transcript or a document to set up the client.'); return; }
-    setAnalysing(true); setErr(null); setStage(0);
-    const timer = setInterval(() => setStage((s) => Math.min(s + 1, ANALYSE_STAGES.length - 1)), 4000);
+    setCreating(true); setErr(null);
     try {
-      // 1. Minimal client up front (so files attach to it), renamed after analysis.
+      // The only blocking step: a minimal shell so files/tasks have a client to
+      // attach to. Everything else is a background task.
       const provisional = domainName(website) || 'New client';
       const created = await api.profiles.create({ name: provisional, inputs: {} });
-      // 2. Upload media → text (server-extracted) for docs, base64 for images.
-      const fileTexts: string[] = [];
-      const images: { base64: string; mime: string }[] = [];
-      for (const f of files) {
-        try {
-          const base64 = await fileToBase64(f);
-          const saved = await api.files.upload({ name: f.name, mime: f.type, dataBase64: base64, clientProfileId: created.id });
-          await api.profiles.addActivity(created.id, { type: 'file', title: `Uploaded ${f.name}`, meta: { fileId: saved.id } }).catch(() => {});
-          if (f.type.startsWith('image/')) images.push({ base64, mime: f.type });
-          else if (saved.extractedText?.trim()) fileTexts.push(saved.extractedText);
-        } catch { /* skip a failed file */ }
-      }
-      // 3. One comprehensive analysis of everything.
-      const r = await api.client.intake({ website: website.trim() || undefined, transcript: transcript.trim() || undefined, fileTexts, images });
-      // 4. Build the profile + milestones, rename, persist.
-      const inputs: ReportInputs = mergeIntakeIntoInputs({}, r);
-      const tracker: Record<string, string> = {};
-      for (const m of r.suggestedMilestones) tracker[m] = new Date().toISOString();
-      const name = r.companyName || provisional;
-      await api.profiles.update(created.id, { name, inputs, ...(Object.keys(tracker).length ? { tracker } : {}) });
-      // 5. Log the journey-seeding activities.
-      if (transcript.trim()) await api.profiles.addActivity(created.id, {
-        type: 'transcript', title: r.summary || 'Call analysed',
-        detail: r.points.length ? r.points.map((p) => `• ${p}`).join('\n') : undefined,
-        meta: (r.angles.length || r.rapport.length) ? { ...(r.angles.length ? { angles: r.angles } : {}), ...(r.rapport.length ? { rapport: r.rapport } : {}) } : undefined,
-      }).catch(() => {});
-      // Rapport openers are largely website-derived — keep them on the website note,
-      // but ONLY when there's no transcript activity already carrying them, so the
-      // rapport array isn't stored on two timeline entries.
-      const rapportOnTranscript = !!transcript.trim() && r.rapport.length > 0;
-      if (website.trim() && r.companySummary) await api.profiles.addActivity(created.id, {
-        type: 'note', title: 'Website summarised', detail: r.companySummary, meta: { website: r.websiteUrl, ...(!rapportOnTranscript && r.rapport.length ? { rapport: r.rapport } : {}) },
-      }).catch(() => {});
-      const finalClient = await api.profiles.get(created.id).catch(() => created);
-      onCreated(finalClient);
-    } catch (e) { setErr(String((e as Error).message)); setAnalysing(false); clearInterval(timer); return; }
-    clearInterval(timer);
+      const snapFiles = files; const site = website.trim(); const text = transcript;
+      bg.run<IntakeRunResult>({
+        kind: 'client-intake',
+        label: `Setting up ${provisional}`,
+        clientId: created.id, clientName: provisional,
+        // The transcript rides the payload so a transport failure can put it back
+        // in the hub's log box — the pasted words must never be lost.
+        payload: text.trim() ? { text } : undefined,
+        fn: async () => {
+          const fileIds: string[] = [];
+          const images: { base64: string; mime: string }[] = [];
+          for (const f of snapFiles) {
+            try {
+              const base64 = await fileToBase64(f);
+              const saved = await api.files.upload({ name: f.name, mime: f.type, dataBase64: base64, clientProfileId: created.id });
+              await api.profiles.addActivity(created.id, { type: 'file', title: `Uploaded ${f.name}`, meta: { fileId: saved.id } }).catch(() => {});
+              fileIds.push(saved.id);
+              if (f.type.startsWith('image/')) images.push({ base64, mime: f.type });
+            } catch { /* skip a failed file */ }
+          }
+          return api.client.intakeRun(created.id, {
+            website: site || undefined,
+            transcript: text.trim() ? text : undefined,
+            fileIds, images,
+          });
+        },
+      });
+      onCreated(created); // open the hub now — it shows the setup running + fills in
+    } catch (e) { setErr(String((e as Error).message)); setCreating(false); }
   };
 
   const cur = STEPS[step];
 
   return (
-    <div className="fixed inset-0 z-30 bg-brand-ink/40 grid place-items-center p-4" onClick={analysing ? undefined : onCancel}>
+    <div className="fixed inset-0 z-30 bg-brand-ink/40 grid place-items-center p-4" onClick={creating ? undefined : onCancel}>
       <div className="card w-full max-w-2xl max-h-[92vh] overflow-auto p-0" onClick={(e) => e.stopPropagation()}>
-        {analysing ? (
-          <div className="p-10 text-center">
-            <div className="grid place-items-center h-14 w-14 rounded-2xl bg-brand-tint text-brand-greenDark mx-auto mb-4"><Loader2 size={26} className="animate-spin" /></div>
-            <h2 className="text-lg font-semibold">Setting up the client</h2>
-            <p className="text-sm text-brand-muted mt-1.5 min-h-[20px]">{ANALYSE_STAGES[stage]}</p>
-            <p className="text-[11px] text-brand-muted mt-3">Reading everything you gave us and building the profile — a few seconds.</p>
-          </div>
-        ) : (
-          <>
+        <>
             <div className="flex items-center justify-between px-5 pt-4">
               <h2 className="text-lg font-semibold flex items-center gap-2"><Building2 size={18} className="text-brand-greenDark" /> New client</h2>
-              <button className="btn-ghost !px-1.5 !py-1" onClick={onCancel}><X size={16} /></button>
+              <button className="btn-ghost !px-1.5 !py-1" onClick={onCancel} disabled={creating}><X size={16} /></button>
             </div>
 
             {/* Stepper */}
@@ -157,19 +141,22 @@ export function ClientCreate({ onCreated, onCancel }: { onCreated: (c: ClientPro
 
             {/* Footer */}
             <div className="flex items-center gap-2 px-5 py-4 border-t border-brand-line">
-              {step > 0 ? <button className="btn-ghost" onClick={() => setStep(step - 1)}><ArrowLeft size={15} /> Back</button> : <span />}
+              {step > 0 ? <button className="btn-ghost" onClick={() => setStep(step - 1)} disabled={creating}><ArrowLeft size={15} /> Back</button> : <span />}
               <div className="flex-1" />
               {step < STEPS.length - 1 ? (
                 <>
-                  <button className="btn-ghost" onClick={analyse} disabled={!canAnalyse} title="Analyse what you've added so far">Skip &amp; set up</button>
-                  <button className="btn-primary" onClick={() => setStep(step + 1)}>Next <ArrowRight size={15} /></button>
+                  <button className="btn-ghost" onClick={analyse} disabled={!canAnalyse || creating} title="Set up in the background with what you've added so far">
+                    {creating ? <Loader2 size={15} className="animate-spin" /> : null} Skip &amp; set up
+                  </button>
+                  <button className="btn-primary" onClick={() => setStep(step + 1)} disabled={creating}>Next <ArrowRight size={15} /></button>
                 </>
               ) : (
-                <button className="btn-primary" onClick={analyse} disabled={!canAnalyse}><Sparkles size={16} /> Analyse &amp; set up</button>
+                <button className="btn-primary" onClick={analyse} disabled={!canAnalyse || creating}>
+                  {creating ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />} Set up in background
+                </button>
               )}
             </div>
           </>
-        )}
       </div>
     </div>
   );

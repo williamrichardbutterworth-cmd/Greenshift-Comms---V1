@@ -1,4 +1,4 @@
-import type { ReportInputs, ClientMeter, ClientIntakeResult } from './api';
+import type { ReportInputs, ClientMeter } from './api';
 import type { CustomerVariables } from './loa';
 
 // The comprehensive per-client record. Everything lives on `inputs` (schemaless
@@ -49,37 +49,10 @@ export function meterSites(meters: ClientMeter[]): string {
   return out.join('; ');
 }
 
-const looksEmail = (s: string) => /@/.test(s);
-
-// Map a comprehensive intake result onto the client `inputs`, merged over existing
-// values (existing non-blank values win, so manual edits aren't clobbered).
-export function mergeIntakeIntoInputs(prev: ReportInputs, r: ClientIntakeResult): ReportInputs {
-  const next = { ...prev } as Record<string, unknown>;
-  const put = (key: string, val: string | undefined) => { if (val && val.trim() && !String(next[key] ?? '').trim()) next[key] = val.trim(); };
-  put('companyName', r.companyName);
-  put('clientName', r.contactName);
-  put('position', r.position);
-  put('email', r.email);
-  put('telephone', r.telephone);
-  put('contact', r.email || r.telephone); // legacy combined field used by reports/LOA
-  put('registeredNo', r.registeredNo);
-  put('businessAddress', r.businessAddress);
-  put('postcode', r.postcode);
-  put('industry', r.industry);
-  put('website', r.websiteUrl);
-  put('companySummary', r.companySummary);
-  put('currentSupplier', r.currentSupplier);
-  put('contractEnd', r.contractEnd);
-  put('consumption', r.consumption);
-  // meters (replace if we found any and none stored yet)
-  if (r.meters.length && !getMeters(prev).length) next.meters = r.meters;
-  put('sites', meterSites(r.meters));
-  // what they buy (fuel) — auto-extracted; existing choice wins
-  const cv = getVars(prev);
-  next.customerVariables = { fuel: cv.fuel || r.fuel } as CustomerVariables;
-  void looksEmail;
-  return next as ReportInputs;
-}
+// NOTE: intake/log-call results are merged into the client record SERVER-SIDE
+// (comms/server/src/services/clientCapture.ts) against a fresh read — the old
+// browser-side mergeIntakeIntoInputs was removed so a stale snapshot can never
+// clobber concurrent edits.
 
 // A short, human label for a meter row.
 export function meterLabel(m: ClientMeter): string {

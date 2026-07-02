@@ -290,11 +290,27 @@ export interface TranscriptExtract { profile: Partial<ReportInputs>; points: str
 export type SourceKind = 'transcript' | 'bill' | 'email' | 'auto';
 export interface SourceAnalysis {
   kind: string; profile: Partial<ReportInputs>; summary: string; points: string[];
+  /** Supply points mentioned in the source (merged by MPAN/MPRN server-side). */
+  meters?: ClientMeter[];
   /** Client-specific conversational angles/hooks for the next call. */
   angles: string[];
   /** Warm, personal rapport-building questions tailored to the business. */
   rapport: string[];
   suggestedMilestones: string[]; provider: string; error?: string;
+}
+
+// ── Capture pipeline: log-call + intake-run (one server round trip each) ──
+export interface LogCallResult {
+  client: ClientProfile;
+  analysis: { summary: string; points: string[]; angles: string[]; rapport: string[]; provider: string; error?: string };
+  calendar: { detected: number };
+  transcriptFileId: string | null;
+}
+export interface IntakeRunResult {
+  client: ClientProfile;
+  intake: { companyName: string; summary: string; companySummary: string; provider: string; error?: string };
+  calendar: { detected: number };
+  transcriptFileId: string | null;
 }
 export interface NextStep { action: string; rationale: string; templateId: string; provider: string; error?: string; }
 export interface RecommendClientPayload {
@@ -519,6 +535,11 @@ export const api = {
       j<ClientProfile>(`/api/client-profiles/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }),
     addActivity: (id: string, activity: NewActivity) =>
       j<ClientProfile>(`/api/client-profiles/${id}/activities`, postJson(activity)),
+    // One round trip: persist the verbatim text + unified extraction + server-side
+    // merge + timeline entry + calendar commitments. Pass `text` for a paste or
+    // `fileId` for an already-uploaded file.
+    logCall: (id: string, input: { text?: string; kind?: SourceKind; fileId?: string }) =>
+      j<LogCallResult>(`/api/client-profiles/${id}/log-call`, postJson(input)),
     remove: (id: string) => j<{ ok: boolean }>(`/api/client-profiles/${id}`, { method: 'DELETE' }),
   },
 
@@ -568,6 +589,11 @@ export const api = {
   // Comprehensive new-client intake (website + transcript + bills → one profile).
   client: {
     intake: (payload: ClientIntakePayload) => j<ClientIntakeResult>('/api/client/intake', postJson(payload)),
+    // Server-side intake against an already-created provisional profile — the
+    // scrape, extraction, merge, timeline entries and calendar commitments all
+    // happen in one request, so the browser only orchestrates uploads.
+    intakeRun: (id: string, payload: { website?: string; transcript?: string; fileIds?: string[]; images?: { base64: string; mime?: string }[] }) =>
+      j<IntakeRunResult>(`/api/client-profiles/${id}/intake-run`, postJson(payload)),
   },
 
   // Bill analysis swarm — extract supplier/meter/rates/contract with source provenance.

@@ -2,6 +2,7 @@ import { aiConfigured } from '../config';
 import { getAI } from '../providers/ai';
 import { clientIntakePrompt, type ClientMeter } from './prompts';
 import { fetchWebsiteText } from './loaIntel';
+import type { RawCommitment } from './reportGenerator';
 
 // Comprehensive new-client intake: scrape the website + read the transcript +
 // uploaded bills (text and/or images), and extract ONE structured profile.
@@ -19,6 +20,8 @@ export interface ClientIntake {
   services: string[];
   companySummary: string;
   summary: string; points: string[]; angles: string[]; rapport: string[]; suggestedMilestones: string[];
+  /** Raw commitment candidates from the transcript — ground via calendarScan before use. */
+  events: RawCommitment[];
   websiteUrl: string;
   provider: string; error?: string;
 }
@@ -26,7 +29,7 @@ export interface ClientIntake {
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 const strList = (v: unknown, n: number): string[] => (Array.isArray(v) ? v.map(str).filter(Boolean).slice(0, n) : []);
 
-function coerceMeters(v: unknown): ClientMeter[] {
+export function coerceMeters(v: unknown): ClientMeter[] {
   if (!Array.isArray(v)) return [];
   return v.slice(0, 20).map((m) => {
     const o = (m ?? {}) as Record<string, unknown>;
@@ -44,7 +47,7 @@ const EMPTY: ClientIntake = {
   contactName: '', position: '', email: '', telephone: '',
   fuel: '', currentSupplier: '', contractEnd: '', consumption: '',
   meters: [], services: [], companySummary: '', summary: '', points: [], angles: [], rapport: [], suggestedMilestones: [],
-  websiteUrl: '', provider: 'none',
+  events: [], websiteUrl: '', provider: 'none',
 };
 
 export async function clientIntake(input: {
@@ -52,6 +55,8 @@ export async function clientIntake(input: {
   transcript?: string;
   fileTexts?: string[];
   images?: { base64: string; mime?: string }[];
+  /** When the call was logged — anchors relative-date resolution for commitments. */
+  loggedAt?: string;
 }): Promise<ClientIntake> {
   // Scrape the website server-side (best-effort).
   let websiteText = '';
@@ -71,9 +76,12 @@ export async function clientIntake(input: {
       transcript: input.transcript,
       fileTexts: input.fileTexts,
       hasImages: (input.images ?? []).length > 0,
+      loggedAt: input.loggedAt,
     });
     const images = (input.images ?? []).map((im) => ({ base64: im.base64, mime: im.mime ?? 'image/png' }));
-    const raw = await ai.generateJSON<Record<string, unknown>>({ system, prompt, maxTokens: 2200, images: images.length ? images : undefined });
+    // 2200 predates the events array — a truncated JSON loses the WHOLE intake,
+    // so give the widened shape (profile + meters + events with verbatim quotes) headroom.
+    const raw = await ai.generateJSON<Record<string, unknown>>({ system, prompt, maxTokens: 3600, images: images.length ? images : undefined });
     const r = raw ?? {};
     const fuel = str(r.fuel).toLowerCase();
     return {
@@ -87,6 +95,7 @@ export async function clientIntake(input: {
       companySummary: str(r.companySummary).slice(0, 800),
       summary: str(r.summary), points: strList(r.points, 12), angles: strList(r.angles, 6), rapport: strList(r.rapport, 4),
       suggestedMilestones: strList(r.suggestedMilestones, 6).filter((m) => MILESTONE_KEYS.includes(m)),
+      events: Array.isArray(r.events) ? (r.events as RawCommitment[]).filter((e) => !!e && typeof e === 'object').slice(0, 12) : [],
       websiteUrl,
       provider: ai.name,
     };

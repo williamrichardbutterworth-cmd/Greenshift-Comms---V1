@@ -3,6 +3,8 @@ import {
   listClientProfiles, getClientProfile, createClientProfile, updateClientProfile, removeClientProfile,
   appendActivity, type NewClientProfile, type ClientActivity,
 } from '../services/clientProfilesStore';
+import { logCallToClient, runClientIntake } from '../services/clientCapture';
+import type { SourceKind } from '../services/prompts';
 
 // Client records — the CRM store (profile + stage + tracker + activity timeline).
 export async function clientProfileRoutes(app: FastifyInstance): Promise<void> {
@@ -33,6 +35,28 @@ export async function clientProfileRoutes(app: FastifyInstance): Promise<void> {
     const p = await appendActivity((req.params as { id: string }).id, (req.body ?? {}) as Partial<ClientActivity>);
     if (!p) return reply.code(404).send({ error: 'Client profile not found.' });
     return p;
+  });
+
+  // "Log this call" in ONE round trip: persist the verbatim text, run ONE unified
+  // extraction, merge the profile server-side (fill blanks; meters by MPAN/MPRN),
+  // append the timeline entry, and upsert spoken commitments onto the calendar.
+  // AI failure degrades to analysis.error on a still-successful capture — never 500s.
+  app.post('/api/client-profiles/:id/log-call', async (req, reply) => {
+    const body = (req.body ?? {}) as { text?: string; kind?: SourceKind; fileId?: string };
+    const r = await logCallToClient((req.params as { id: string }).id, body);
+    if (!r) return reply.code(404).send({ error: 'Client profile not found.' });
+    return r;
+  });
+
+  // The full new-client intake against an (already-created) provisional profile:
+  // website scrape + transcript + uploaded media → one extraction, merged + logged
+  // server-side, first-call commitments straight onto the calendar. Same
+  // degrade-not-500 contract as log-call.
+  app.post('/api/client-profiles/:id/intake-run', async (req, reply) => {
+    const body = (req.body ?? {}) as { website?: string; transcript?: string; fileIds?: string[]; images?: { base64: string; mime?: string }[] };
+    const r = await runClientIntake((req.params as { id: string }).id, body);
+    if (!r) return reply.code(404).send({ error: 'Client profile not found.' });
+    return r;
   });
 
   app.delete('/api/client-profiles/:id', async (req, reply) => {
